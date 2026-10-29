@@ -11,10 +11,7 @@ every meeting by word to jump to the moment it was said.
 - **Search**: SQLite full-text search that copes with Bulgarian word endings
   (`среща` finds `срещата`, `срещи`).
 
-| Folder | What |
-|---|---|
-| [app/](app/) | The desktop app (Tauri v2 + React + TypeScript, SQLite) |
-| [tools/stt-compare/](tools/stt-compare/) | Command-line script that compares both providers on one file, with WER scoring |
+The app lives in [app/](app/) (Tauri v2 + React + TypeScript, SQLite).
 
 ## Requirements (Windows)
 
@@ -42,8 +39,6 @@ To build an installer: `bun run tauri build` (output in `app/src-tauri/target/re
 3. On the meeting page, **Transcribe with… → the other provider**. Both transcripts are kept: switch
    between them with the transcript picker at the top and compare text and speakers while the
    audio plays.
-4. For a number instead of an impression, use the [comparison script](tools/stt-compare/README.md),
-   which computes word error rate against a transcript you've checked by ear.
 
 ## Recording a meeting
 
