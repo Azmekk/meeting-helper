@@ -47,6 +47,7 @@ jobs:
               echo "::error::$tag is already published. Bump \"version\" in app/src-tauri/tauri.conf.json first."
               exit 1
             fi
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$tag\") | .id" | head -1)
           else
             cat > notes.md <<'EOF'
           **Which file do I need?**
@@ -60,9 +61,16 @@ jobs:
 
           You also need [ffmpeg](https://ffmpeg.org/download.html) installed; the app tells you how on first start.
           EOF
-            gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Meeting Helper $tag" --notes-file notes.md
+            # Take the id from the create response: the release list can lag behind by a few seconds.
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" -X POST \
+              -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" -f name="Meeting Helper $tag" \
+              -F body=@notes.md -F draft=true --jq .id)
           fi
-          echo "id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$tag\") | .id" | head -1)" >> "$GITHUB_OUTPUT"
+          if [ -z "$id" ]; then
+            echo "::error::Couldn't get the id of the $tag release."
+            exit 1
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
 
   build:
     name: ${{ matrix.name }}
@@ -133,4 +141,15 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ needs.create-release.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          # Last safety net: never publish a release with installers missing.
+          # 14 = per platform: setup.exe + msi (Windows x2), dmg + app.tar.gz (macOS x2),
+          # AppImage + deb + rpm (Linux x2).
+          expected=14
+          count=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate --jq '[.[] | select(.name | test("\\.(exe|msi|dmg|tar\\.gz|AppImage|deb|rpm)$"))] | length')
+          if [ "$count" -lt "$expected" ]; then
+            echo "::error::Only $count of $expected installers are attached; leaving the release as a draft."
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -X PATCH -F draft=false -f make_latest=true --jq .html_url
