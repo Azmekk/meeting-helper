@@ -118,7 +118,8 @@ published release from the GitHub API.
 ### Releasing
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds all six targets (Windows,
-macOS and Linux, each on x64 and ARM64) and attaches them to a draft release.
+macOS and Linux, each on x64 and ARM64) and publishes them as a GitHub release once every build has
+succeeded. Until then the release stays a draft, so nobody sees it with installers missing.
 
 1. Bump `version` in [`app/src-tauri/tauri.conf.json`](app/src-tauri/tauri.conf.json) and commit.
 2. Push a matching tag, or run the **Release** workflow from the Actions tab:
@@ -126,7 +127,9 @@ macOS and Linux, each on x64 and ARM64) and attaches them to a draft release.
    git tag v0.2.0
    git push origin v0.2.0
    ```
-3. When the builds finish, review the draft on the Releases page and publish it.
+3. That's it. In about 10 minutes the release is live, the download page links to the new
+   installers, and the app tells existing users a new version is out. If a build fails, the draft
+   stays on the Releases page: fix the problem and run the workflow again (it reuses the draft).
 
 ## License
 
