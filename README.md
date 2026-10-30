@@ -108,6 +108,12 @@ bun run tauri dev
 
 `bun run tauri build` makes an installer for your own OS in `app/src-tauri/target/release/bundle/`.
 
+### Download page
+
+[`site/`](site/) is the download page: plain HTML with no build step.
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) publishes it to GitHub Pages whenever
+it changes on `main`. Its download buttons read the latest published release from the GitHub API.
+
 ### Releasing
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds all six targets (Windows,
