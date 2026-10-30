@@ -1,0 +1,94 @@
+# Builds installers for Windows, macOS and Linux and attaches them to a draft
+# GitHub release named after the version in app/src-tauri/tauri.conf.json.
+#
+# To release: bump "version" in tauri.conf.json, commit, then either push a tag
+# (git tag v0.2.0 && git push origin v0.2.0) or run this workflow from the
+# Actions tab. Review the draft release on GitHub and publish it.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-latest
+            args: ''
+          - name: Windows ARM64
+            runner: windows-11-arm
+            args: ''
+          - name: macOS Apple Silicon
+            runner: macos-latest
+            args: --target aarch64-apple-darwin
+          - name: macOS Intel
+            runner: macos-latest
+            args: --target x86_64-apple-darwin
+          - name: Linux x64
+            runner: ubuntu-24.04
+            args: ''
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            args: ''
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # webkit/appindicator/rsvg/patchelf for Tauri; dbus for the keyring.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both Mac targets build on the Apple Silicon runner.
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+          key: ${{ matrix.name }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: bun install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tauriScript: bun run tauri
+          args: ${{ matrix.args }}
+          tagName: v__VERSION__
+          releaseName: Meeting Helper v__VERSION__
+          releaseDraft: true
+          releaseBody: |
+            **Which file do I need?**
+            - Windows: `Meeting.Helper_<version>_x64-setup.exe` (or `_arm64-setup.exe` on ARM PCs)
+            - macOS: `_aarch64.dmg` for Apple Silicon (M1 and later), `_x64.dmg` for Intel Macs
+            - Linux: `.AppImage` runs anywhere; `.deb` for Debian/Ubuntu, `.rpm` for Fedora
+
+            The builds aren't code-signed, so the first launch needs one extra step:
+            - Windows SmartScreen: **More info → Run anyway**
+            - macOS: if it says the app is damaged, run `xattr -cr "/Applications/Meeting Helper.app"` once
+
+            You also need [ffmpeg](https://ffmpeg.org/download.html) installed (see the README).

@@ -4,6 +4,7 @@ import { connectObs, disconnectObs, useRecorder } from '../../lib/obs';
 import { getSecret, setSecret } from '../../lib/secrets';
 import { useSettings } from '../../lib/settings';
 import { Badge, Button, Callout, Card, Field, Input, errorMessage, toast } from '../ui';
+import { KEY_STORE } from '../../lib/platform';
 
 export default function ConnectionCard() {
   const status = useRecorder((s) => s.status);
@@ -81,7 +82,7 @@ export default function ConnectionCard() {
             />
           </Field>
         </div>
-        <Field label="Server password" hint="Stored in Windows Credential Manager.">
+        <Field label="Server password" hint={`Stored in ${KEY_STORE}.`}>
           <Input
             type="password"
             value={password}

@@ -1,5 +1,6 @@
-// API keys and passwords live in the Windows Credential Manager (via the Rust
-// `keyring` crate), never in the settings file.
+// API keys and passwords live in the OS secret store (Windows Credential Manager,
+// macOS Keychain, Linux Secret Service) via the Rust `keyring` crate, never in
+// the settings file.
 import { invoke } from '@tauri-apps/api/core';
 
 export type SecretName = 'soniox_api_key' | 'elevenlabs_api_key' | 'obs_password';

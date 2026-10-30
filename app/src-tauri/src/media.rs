@@ -38,6 +38,15 @@ impl Tools {
     pub fn resolve(ffmpeg_path: &str) -> Tools {
         let p = ffmpeg_path.trim().trim_matches('"');
         if p.is_empty() {
+            // Apps opened from Finder don't get the shell's PATH, so Homebrew's
+            // folders aren't searched; look there before falling back to PATH.
+            #[cfg(target_os = "macos")]
+            for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+                let ffmpeg = Path::new(dir).join("ffmpeg");
+                if ffmpeg.is_file() {
+                    return Tools { ffprobe: Path::new(dir).join("ffprobe"), ffmpeg };
+                }
+            }
             return Tools {
                 ffmpeg: "ffmpeg".into(),
                 ffprobe: "ffprobe".into(),

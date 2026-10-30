@@ -3,6 +3,7 @@ import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { FolderOpen } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button, Card, Spinner, errorMessage, toast } from '../ui';
+import { KEY_STORE } from '../../lib/platform';
 
 export function DataSection() {
   const [dir, setDir] = useState<string | null>(null);
@@ -40,7 +41,7 @@ export function DataSection() {
           Open folder
         </Button>
       </div>
-      <p className="mt-2 text-xs text-muted">API keys aren't stored here. They're in Windows Credential Manager.</p>
+      <p className="mt-2 text-xs text-muted">API keys aren't stored here. They're in {KEY_STORE}.</p>
     </Card>
   );
 }

@@ -8,6 +8,7 @@ import type { ProviderId } from '../../lib/types';
 import { Badge, Button, Callout, Card, IconButton, Input, Spinner, clsx, errorMessage, toast } from '../ui';
 import { ApiKeyGuide } from './ApiKeyGuides';
 import { saveSettings, setKeyStatus } from './common';
+import { KEY_STORE } from '../../lib/platform';
 
 // Fallbacks in case the provider module isn't wired up yet.
 const META: Record<ProviderId, { name: string; secret: SecretName; tagline: string }> = {
@@ -195,7 +196,7 @@ export function ProviderCard({ id }: { id: ProviderId }) {
               Save
             </Button>
           </div>
-          <span className="text-xs text-muted">Stored in Windows Credential Manager, never in the settings file.</span>
+          <span className="text-xs text-muted">Stored in {KEY_STORE}, never in the settings file.</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

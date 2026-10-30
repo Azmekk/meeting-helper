@@ -5,6 +5,7 @@ import { ffmpegVersion } from '../../lib/native';
 import { useSettings } from '../../lib/settings';
 import { Button, Callout, Card, errorMessage, toast } from '../ui';
 import { CommitInput, saveSettings } from './common';
+import { FFMPEG_EXE, FFMPEG_INSTALL, FFPROBE_EXE, IS_WINDOWS } from '../../lib/platform';
 
 type Check = { kind: 'idle' } | { kind: 'running' } | { kind: 'ok'; version: string } | { kind: 'error'; message: string };
 
@@ -29,10 +30,10 @@ export function FfmpegSection() {
   async function browse() {
     try {
       const picked = await open({
-        title: 'Select ffmpeg.exe',
+        title: `Select ${FFMPEG_EXE}`,
         multiple: false,
         directory: false,
-        filters: [{ name: 'ffmpeg', extensions: ['exe'] }],
+        filters: IS_WINDOWS ? [{ name: 'ffmpeg', extensions: ['exe'] }] : undefined,
       });
       if (typeof picked === 'string') {
         await setPath(picked);
@@ -51,7 +52,7 @@ export function FfmpegSection() {
       <div className="space-y-4">
         <div className="flex flex-col gap-1.5">
           <label htmlFor="ffmpeg-path" className="text-[13px] font-medium">
-            Path to ffmpeg.exe
+            Path to {FFMPEG_EXE}
           </label>
           <div className="flex gap-2">
             <CommitInput
@@ -70,7 +71,7 @@ export function FfmpegSection() {
             </Button>
           </div>
           <span className="text-xs text-muted">
-            Leave empty to use ffmpeg from PATH. ffprobe.exe must be in the same folder.
+            Leave empty to use ffmpeg from PATH. {FFPROBE_EXE} must be in the same folder.
           </span>
         </div>
 
@@ -84,11 +85,16 @@ export function FfmpegSection() {
             <p className="break-words">{check.message}</p>
             <p className="pt-1">
               Install it from a terminal with{' '}
-              <code className="rounded bg-sunken px-1 font-mono text-[12px] text-text">winget install Gyan.FFmpeg</code>{' '}
-              (or <code className="rounded bg-sunken px-1 font-mono text-[12px] text-text">scoop install ffmpeg</code> /{' '}
-              <code className="rounded bg-sunken px-1 font-mono text-[12px] text-text">choco install ffmpeg</code>),
+              {FFMPEG_INSTALL.map((cmd, i) => (
+                <span key={cmd}>
+                  {i === 1 && '(or '}
+                  {i > 1 && ' / '}
+                  <code className="rounded bg-sunken px-1 font-mono text-[12px] text-text">{cmd}</code>
+                  {i > 0 && i === FFMPEG_INSTALL.length - 1 && ')'}{' '}
+                </span>
+              ))}
               then restart Meeting Helper so it sees the new PATH. Or click <b className="text-text">Browse</b> and
-              select ffmpeg.exe.
+              select {FFMPEG_EXE}.
             </p>
           </Callout>
         )}

@@ -27,11 +27,21 @@ tauri-plugin-http = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
-keyring = { version = "3", features = ["windows-native"] }
 # Same major version tauri-plugin-http already uses, so it's built only once.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart", "stream"] }
 tokio = { version = "1", features = ["fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
+
+# Each OS keeps secrets in its own store: Credential Manager, Keychain, or the
+# Secret Service (GNOME Keyring / KWallet; needs libdbus-1-dev to build).
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
