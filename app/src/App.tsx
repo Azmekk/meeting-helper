@@ -1,6 +1,7 @@
 import { CircleDot, Library, Search, Settings as SettingsIcon, type LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom';
+import logo from './assets/logo.svg';
 import { Callout, Spinner, Toaster, clsx, errorMessage } from './components/ui';
 import { initDb } from './lib/db';
 import { initRecorder, useRecorder } from './lib/obs';
@@ -48,7 +49,7 @@ export default function App() {
   return (
     <div className="flex h-full">
       <Sidebar />
-      <main className="min-w-0 flex-1 overflow-y-auto">
+      <main className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <Routes>
           <Route path="/" element={<Navigate to="/meetings" replace />} />
           <Route path="/record" element={<RecordScreen />} />
@@ -71,9 +72,7 @@ function Sidebar() {
   return (
     <nav className="flex w-56 shrink-0 flex-col border-r border-line bg-sunken/60 px-3 py-4">
       <div className="mb-6 flex items-center gap-2.5 px-2">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-on-accent">
-          <CircleDot size={17} />
-        </div>
+        <img src={logo} alt="" className="h-8 w-8" />
         <div className="leading-tight">
           <div className="font-display text-[15px] font-semibold">Meeting Helper</div>
           <div className="text-[11px] text-muted">Record · Transcribe · Find</div>

@@ -4,7 +4,10 @@ import { Check, ExternalLink as ExternalLinkIcon } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { create } from 'zustand';
 import { Input, clsx, errorMessage, toast } from '../ui';
+import { PROVIDERS } from '../../lib/providers';
+import { getSecret } from '../../lib/secrets';
 import { useSettings, type Settings } from '../../lib/settings';
+import type { ProviderId } from '../../lib/types';
 
 // Plain hrefs don't open the system browser inside Tauri, so route clicks
 // through the opener plugin.
@@ -21,6 +24,27 @@ export function ExtLink({ href, children }: { href: string; children: ReactNode 
       {children}
       <ExternalLinkIcon size={11} className="shrink-0 opacity-70" />
     </a>
+  );
+}
+
+// ---------- Which providers have a key ----------
+
+// Shared so the settings tabs can show a dot without mounting every card.
+export const useKeyStatus = create<Partial<Record<ProviderId, boolean>>>(() => ({}));
+
+export function setKeyStatus(id: ProviderId, hasKey: boolean) {
+  useKeyStatus.setState({ [id]: hasKey });
+}
+
+export async function loadKeyStatus(): Promise<void> {
+  await Promise.all(
+    (Object.keys(PROVIDERS) as ProviderId[]).map(async (id) => {
+      try {
+        setKeyStatus(id, !!(await getSecret(PROVIDERS[id].secret)));
+      } catch {
+        // The card reports read errors when it opens.
+      }
+    }),
   );
 }
 

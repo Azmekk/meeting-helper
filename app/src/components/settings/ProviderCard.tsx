@@ -7,7 +7,7 @@ import { useSettings } from '../../lib/settings';
 import type { ProviderId } from '../../lib/types';
 import { Badge, Button, Callout, Card, IconButton, Input, Spinner, clsx, errorMessage, toast } from '../ui';
 import { ApiKeyGuide } from './ApiKeyGuides';
-import { saveSettings } from './common';
+import { saveSettings, setKeyStatus } from './common';
 
 // Fallbacks in case the provider module isn't wired up yet.
 const META: Record<ProviderId, { name: string; secret: SecretName; tagline: string }> = {
@@ -47,6 +47,7 @@ export function ProviderCard({ id }: { id: ProviderId }) {
       .then((v) => {
         if (!alive) return;
         setSaved(v);
+        setKeyStatus(id, !!v);
         setDraft(v ?? '');
         setGuideOpen(!v);
       })
@@ -57,7 +58,7 @@ export function ProviderCard({ id }: { id: ProviderId }) {
     return () => {
       alive = false;
     };
-  }, [secretName, name]);
+  }, [id, secretName, name]);
 
   const trimmed = draft.trim();
   const dirty = trimmed !== (saved ?? '');
@@ -69,6 +70,7 @@ export function ProviderCard({ id }: { id: ProviderId }) {
     try {
       await setSecret(secretName, trimmed);
       setSaved(trimmed);
+      setKeyStatus(id, true);
       setDraft(trimmed);
       setReveal(false);
       setTest({ kind: 'idle' });
@@ -85,6 +87,7 @@ export function ProviderCard({ id }: { id: ProviderId }) {
     try {
       await deleteSecret(secretName);
       setSaved(null);
+      setKeyStatus(id, false);
       setDraft('');
       setTest({ kind: 'idle' });
       setGuideOpen(true);
