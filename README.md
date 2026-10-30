@@ -1,34 +1,58 @@
-<p align="center">
-  <img src="app/src-tauri/app-icon.svg" width="96" alt="">
-</p>
+<div align="center">
 
-<h1 align="center">Meeting Helper</h1>
+<img src="app/src-tauri/app-icon.svg" width="96" height="96" alt="Meeting Helper icon">
 
-<p align="center">
-  Record online meetings, get an editable Bulgarian/English transcript with speakers,<br>
-  and search every meeting by word to jump to the moment it was said.
-</p>
+# Meeting Helper
 
-<p align="center">
-  <a href="https://meetinghelper.vexbyte.com/"><b>Website</b></a> · <a href="../../releases/latest"><b>Download</b></a>
-</p>
+**Record online meetings, get an editable Bulgarian/English transcript with speakers, and find anything that was said.**
 
----
+[![Latest release](https://img.shields.io/github/v/release/Azmekk/meeting-helper?label=download&color=1f8a7a&cacheSeconds=3600)](https://github.com/Azmekk/meeting-helper/releases/latest)
+![Windows · macOS · Linux](https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-x64%20%7C%20ARM64-555)
+[![Downloads](https://img.shields.io/github/downloads/Azmekk/meeting-helper/total?color=555)](https://github.com/Azmekk/meeting-helper/releases)
 
-- **Record** through OBS Studio, controlled from the app: codec, quality, format and output folder.
-  Your mic and the other people go on separate audio tracks, so your lines are always labelled as you.
-- **Transcribe** with Soniox or ElevenLabs, your choice per meeting, with speaker detection. Run both
-  on the same meeting and switch between the transcripts to see which did better.
-- **Edit** text, rename speakers ("Speaker 2" → "Ivan"), reassign or merge lines. Click a line's
-  timestamp to play the recording from there.
-- **Search** across all meetings, or within one. Copes with Bulgarian word endings: `среща` finds
-  `срещата` and `срещи`. Each hit links to the exact timestamp.
+[**Website**](https://meetinghelper.vexbyte.com/) · [**Download**](https://github.com/Azmekk/meeting-helper/releases/latest) · [Features](#features) · [First run](#first-run) · [Cost](#cost) · [FAQ](#faq) · [Development](#development)
+
+<img src="docs/screenshots/meeting-dark.webp" alt="A meeting open in Meeting Helper: the audio player and speaker list on the left, the Bulgarian/English transcript with named speakers and timestamps on the right" width="900">
+
+</div>
+
+Record a call through OBS (or import any recording), pick Soniox or ElevenLabs, and a few minutes later you have a transcript with speakers that you can edit, export and search. Click any line to hear the moment it was said.
+
+## Features
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🎙️ Record
+Through OBS Studio, controlled from the app: codec, quality, format and output folder. Your mic and the other people go on separate audio tracks, so your lines are always labelled as you.
+
+### 📝 Transcribe
+With Soniox or ElevenLabs, your choice per meeting, with speaker detection. Run both on the same meeting and switch between the transcripts to see which did better.
+
+</td>
+<td width="50%" valign="top">
+
+### ✏️ Edit
+Fix text, rename speakers ("Speaker 2" → "Ivan"), reassign or merge lines. Click a line's timestamp to play the recording from there. Export to text, Markdown or subtitles.
+
+### 🔍 Search
+Across all meetings, or within one. Copes with Bulgarian word endings: `среща` finds `срещата` and `срещи`. Each hit links to the exact timestamp.
+
+</td>
+</tr>
+</table>
+
+<div align="center">
+<img src="docs/screenshots/search-light.webp" alt="Search across meetings in the light theme: the word среща also matches срещата, and each hit shows the speaker and timestamp" width="900">
+<br><sub>Searching every meeting at once, in the light theme</sub>
+</div>
 
 Everything stays on your computer except the audio sent to the transcription provider you pick.
 
-## Install
+## Download
 
-Download the latest build from the [website](https://meetinghelper.vexbyte.com/) or the [Releases](../../releases) page:
+Get the latest build from the [**website**](https://meetinghelper.vexbyte.com/) or the [**Releases page**](https://github.com/Azmekk/meeting-helper/releases/latest):
 
 | System | File |
 |---|---|
@@ -36,43 +60,32 @@ Download the latest build from the [website](https://meetinghelper.vexbyte.com/)
 | macOS | `…_aarch64.dmg` for Apple Silicon (M1 and later), `…_x64.dmg` for Intel |
 | Linux | `.AppImage` (any distro), `.deb` (Debian/Ubuntu) or `.rpm` (Fedora) |
 
-The builds aren't code-signed, so the first launch needs one extra step:
-
-- **Windows**: SmartScreen says "Windows protected your PC" → **More info → Run anyway**.
-- **macOS**: if it says the app is damaged or can't be opened, run this once in Terminal:
-  `xattr -cr "/Applications/Meeting Helper.app"`
-
-You also need:
+**You also need:**
 
 - **ffmpeg** (converts recordings and pulls out the audio):
   - Windows: `winget install Gyan.FFmpeg`
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg`
-- **[OBS Studio](https://obsproject.com) 30+**, only for recording. Importing existing files works
-  without it.
+- **[OBS Studio](https://obsproject.com) 30+**, only for recording. Importing existing files works without it.
 - **An API key** for Soniox and/or ElevenLabs. Settings walks you through getting one.
+
+The app tells you if ffmpeg or OBS is missing, and when a new version is out.
 
 ## First run
 
-1. **Settings → Soniox / ElevenLabs**: paste a key and press **Test key**. Each tab has a step-by-step
-   guide for getting the key. The starred provider is the default for new transcriptions.
-2. **Settings → Language**: Bulgarian and English are preselected. Add names and jargon under
-   *Custom vocabulary* so they're spelled right.
+1. **Settings → Soniox / ElevenLabs**: paste a key and press **Test key**. Each tab has a step-by-step guide for getting the key. The starred provider is the default for new transcriptions.
+2. **Settings → Language**: Bulgarian and English are preselected. Add names and jargon under *Custom vocabulary* so they're spelled right.
 3. **Settings → Recording**: set your name; it's used for the lines from your microphone.
 
 ### Recording a meeting
 
-1. In OBS: **Tools → WebSocket Server Settings → Enable WebSocket server**, then **Show Connect
-   Info** and copy the password.
-2. In the app: **Record**, paste the password, **Connect**. The app sets up OBS's audio tracks and
-   recording output for you.
-3. Wear headphones (otherwise your mic also picks up the other people), press record, then stop.
-   The recording is converted to MP4 and transcribed automatically.
+1. In OBS: **Tools → WebSocket Server Settings → Enable WebSocket server**, then **Show Connect Info** and copy the password.
+2. In the app: **Record**, paste the password, **Connect**. The app sets up OBS's audio tracks and recording output for you.
+3. Wear headphones (otherwise your mic also picks up the other people), press record, then stop. The recording is converted to MP4 and transcribed automatically.
 
 ### Importing a recording
 
-**Meetings → Import recording** and pick any audio or video file. To compare providers, open the
-meeting and use **Transcribe with… → the other provider**; both transcripts are kept.
+**Meetings → Import recording** and pick any audio or video file. To compare providers, open the meeting and use **Transcribe with… → the other provider**; both transcripts are kept.
 
 ## Cost
 
@@ -83,18 +96,46 @@ You pay the provider directly, per hour of audio:
 | Soniox (`stt-async-v5`) | about $0.10 | Uses all language hints; good with Bulgarian/English switching |
 | ElevenLabs (`scribe_v2`) | about $0.22 | Custom vocabulary adds about $0.05 |
 
-With **Transcribe my microphone separately** on (the default), your mic and the desktop audio are
-sent as two tracks, which doubles the cost. Turn it off in **Settings → Recording** to send one
-mixed track.
+With **Transcribe my microphone separately** on (the default), your mic and the desktop audio are sent as two tracks, which doubles the cost. Turn it off in **Settings → Recording** to send one mixed track.
 
-## Where data lives
+## FAQ
+
+<details>
+<summary><b>Windows says "Windows protected your PC", or macOS says the app is damaged</b></summary>
+
+The builds aren't code-signed yet. On Windows, click **More info → Run anyway**. On macOS, run this once in Terminal:
+
+```bash
+xattr -cr "/Applications/Meeting Helper.app"
+```
+
+Every release is built from this repository by [GitHub Actions](https://github.com/Azmekk/meeting-helper/actions/workflows/release.yml), so you can check exactly what went into it.
+</details>
+
+<details>
+<summary><b>Where do my recordings and transcripts go?</b></summary>
+
+Recordings stay in the folder you chose. Transcripts live in a local database, and the only thing that leaves your computer is the audio sent to the provider you pick for that meeting. There's no account and no telemetry; the app otherwise only goes online to check GitHub for a new release.
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | Meetings database and settings | `%APPDATA%\com.meetinghelper.app` | `~/Library/Application Support/com.meetinghelper.app` | `~/.local/share/com.meetinghelper.app` |
 | API keys and OBS password | Credential Manager | Keychain | Secret Service (GNOME Keyring / KWallet) |
 
-Recordings stay in the folder you chose. **Settings → System → Open folder** opens the data folder.
+**Settings → System → Open folder** opens the data folder.
+</details>
+
+<details>
+<summary><b>Why are my lines labelled as someone else?</b></summary>
+
+Your mic is only kept apart when the recording has separate tracks and you wear headphones. Without headphones the desktop track hears you too. You can fix lines afterwards: reassign them to the right speaker, or merge them with the next line.
+</details>
+
+<details>
+<summary><b>Which provider should I use?</b></summary>
+
+Soniox is cheaper and handles switching between Bulgarian and English well, so it's the default. If a transcript comes out poorly, run ElevenLabs on the same meeting and compare; both transcripts are kept and you can switch between them.
+</details>
 
 ## Development
 
