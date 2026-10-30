@@ -120,3 +120,10 @@ macOS and Linux, each on x64 and ARM64) and attaches them to a draft release.
    git push origin v0.2.0
    ```
 3. When the builds finish, review the draft on the Releases page and publish it.
+
+## License
+
+Free for personal use, including at work: install it, use it, build it from source and modify it
+for yourself. Selling it, offering it as a service, redistributing it or reusing its code in other
+projects is not allowed without written permission. The source is public so you can see how it
+works and send improvements. It isn't open source. See [LICENSE](LICENSE) for the full terms.

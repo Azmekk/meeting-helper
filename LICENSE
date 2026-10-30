@@ -1,0 +1,68 @@
+Meeting Helper Personal Use License
+
+Copyright (c) 2026 Azmekk (https://github.com/Azmekk). All rights reserved.
+
+This license covers Meeting Helper, including its source code, compiled
+applications, installers, icons and documentation (together, "the Software").
+The source code is published so people can see how the Software works and
+help improve it. Publishing it does not make it open source.
+
+1. What you may do
+
+   a. Download, install and use the Software, free of charge, on any number
+      of devices you use yourself. This includes using it in your own work,
+      for example to record and transcribe meetings you take part in.
+
+   b. Read and study the source code, and build the Software from it, for the
+      use described in 1a.
+
+   c. Modify the source code for your own private use, as long as you do not
+      share the modified version with anyone else.
+
+   d. Fork the repository on GitHub solely to propose changes back to the
+      original project through pull requests. By submitting a contribution,
+      you agree that it may be used under this license.
+
+2. What you may not do
+
+   a. Sell, rent, lease or sublicense the Software, or charge any fee for it
+      or for access to it, alone or as part of another product or service.
+
+   b. Offer the Software, or any functionality based on its code, as a
+      hosted, online or managed service to others.
+
+   c. Copy, reuse or adapt any part of the source code, including in modified
+      form, in any other software, project or product.
+
+   d. Distribute the Software or any modified version of it, except by
+      sharing a link to the official repository or its releases page.
+
+   e. Remove or change this license, the copyright notice, or the name and
+      branding in a way that suggests the Software is your own.
+
+3. Permission for anything else
+
+   For any use not allowed above, including commercial use or reuse of the
+   code, ask the copyright holder for written permission.
+
+4. Third-party components
+
+   The Software uses third-party libraries, each under its own license. This
+   license does not change their terms. Your use of the transcription
+   providers (Soniox, ElevenLabs) and of OBS Studio and ffmpeg is governed by
+   their own terms.
+
+5. Ending this license
+
+   If you break any of these terms, your rights under this license end
+   automatically.
+
+6. No warranty
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+   WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+   OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE, INCLUDING ANY COSTS CHARGED BY THIRD-PARTY SERVICES.
