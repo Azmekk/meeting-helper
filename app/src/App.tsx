@@ -2,11 +2,14 @@ import { CircleDot, Library, Search, Settings as SettingsIcon, type LucideIcon }
 import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom';
 import logo from './assets/logo.svg';
+import { FfmpegDialog } from './components/FfmpegDialog';
+import { SidebarUpdateNotice, UpdateDialog } from './components/UpdateNotice';
 import { Callout, Spinner, Toaster, clsx, errorMessage } from './components/ui';
 import { initDb } from './lib/db';
 import { initRecorder, useRecorder } from './lib/obs';
 import { useJobs } from './lib/pipeline';
 import { useSettings } from './lib/settings';
+import { initUpdateCheck } from './lib/updates';
 import MeetingScreen from './screens/MeetingScreen';
 import MeetingsScreen from './screens/MeetingsScreen';
 import RecordScreen from './screens/RecordScreen';
@@ -22,6 +25,7 @@ export default function App() {
         await useSettings.getState().load();
         await initDb();
         initRecorder();
+        initUpdateCheck();
         setBoot('ready');
       } catch (err) {
         setBoot({ error: errorMessage(err) });
@@ -60,6 +64,8 @@ export default function App() {
           <Route path="*" element={<Navigate to="/meetings" replace />} />
         </Routes>
       </main>
+      <FfmpegDialog />
+      <UpdateDialog />
       <Toaster />
     </div>
   );
@@ -90,6 +96,7 @@ function Sidebar() {
       </div>
 
       <div className="mt-auto">
+        <SidebarUpdateNotice />
         <NavItem to="/settings" icon={SettingsIcon} label="Settings" />
       </div>
     </nav>

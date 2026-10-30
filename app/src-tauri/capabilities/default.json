@@ -20,6 +20,9 @@
         },
         {
           "url": "https://api.elevenlabs.io/*"
+        },
+        {
+          "url": "https://api.github.com/repos/Azmekk/meeting-helper/*"
         }
       ]
     },

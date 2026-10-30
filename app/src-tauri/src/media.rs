@@ -38,19 +38,7 @@ impl Tools {
     pub fn resolve(ffmpeg_path: &str) -> Tools {
         let p = ffmpeg_path.trim().trim_matches('"');
         if p.is_empty() {
-            // Apps opened from Finder don't get the shell's PATH, so Homebrew's
-            // folders aren't searched; look there before falling back to PATH.
-            #[cfg(target_os = "macos")]
-            for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
-                let ffmpeg = Path::new(dir).join("ffmpeg");
-                if ffmpeg.is_file() {
-                    return Tools { ffprobe: Path::new(dir).join("ffprobe"), ffmpeg };
-                }
-            }
-            return Tools {
-                ffmpeg: "ffmpeg".into(),
-                ffprobe: "ffprobe".into(),
-            };
+            return Self::from_path_or_known_dirs();
         }
         let ffmpeg = PathBuf::from(p);
         let probe_name = if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" };
@@ -60,6 +48,48 @@ impl Tools {
         };
         Tools { ffmpeg, ffprobe }
     }
+
+    /// ffmpeg from PATH, or from where package managers put it when PATH
+    /// doesn't have it: an app keeps the PATH it started with, so a fresh
+    /// `winget install` isn't seen until restart, and apps opened from Finder
+    /// never get Homebrew's folders.
+    fn from_path_or_known_dirs() -> Tools {
+        let exe = |name: &str| if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+        let on_path = std::env::var_os("PATH")
+            .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(exe("ffmpeg")).is_file()))
+            .unwrap_or(false);
+        if !on_path {
+            for dir in known_dirs() {
+                if dir.join(exe("ffmpeg")).is_file() {
+                    return Tools { ffmpeg: dir.join(exe("ffmpeg")), ffprobe: dir.join(exe("ffprobe")) };
+                }
+            }
+        }
+        Tools { ffmpeg: "ffmpeg".into(), ffprobe: "ffprobe".into() }
+    }
+}
+
+/// Install folders of the package managers the app suggests (winget, scoop,
+/// Chocolatey on Windows; Homebrew on macOS).
+fn known_dirs() -> Vec<PathBuf> {
+    #[allow(unused_mut)] // nothing to add on Linux
+    let mut dirs = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(local).join(r"Microsoft\WinGet\Links"));
+        }
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            dirs.push(PathBuf::from(home).join(r"scoop\shims"));
+        }
+        dirs.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+    }
+    dirs
 }
 
 fn command(program: &Path) -> Command {

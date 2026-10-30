@@ -7,6 +7,7 @@ import { FfmpegSection } from '../components/settings/FfmpegSection';
 import { LanguageSection } from '../components/settings/LanguageSection';
 import { ProviderCard } from '../components/settings/ProviderCard';
 import { RecordingSection } from '../components/settings/RecordingSection';
+import { UpdatesSection } from '../components/settings/UpdatesSection';
 import { SavedIndicator, loadKeyStatus, useKeyStatus } from '../components/settings/common';
 import { useSettings } from '../lib/settings';
 import type { ProviderId } from '../lib/types';
@@ -84,6 +85,7 @@ export default function SettingsScreen() {
         {tab === 'recording' && <RecordingSection />}
         {tab === 'system' && (
           <>
+            <UpdatesSection />
             <FfmpegSection />
             <DataSection />
           </>

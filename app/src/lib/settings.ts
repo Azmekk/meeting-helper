@@ -26,6 +26,10 @@ export interface Settings {
   obsPort: number;
   // Last OBS scene picked on the Record screen.
   obsScene: string;
+  // Look for a newer release on GitHub at start-up and every few hours.
+  checkForUpdates: boolean;
+  // A release the user said to skip; not announced again.
+  skippedVersion: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -40,6 +44,8 @@ export const DEFAULT_SETTINGS: Settings = {
   obsHost: '127.0.0.1',
   obsPort: 4455,
   obsScene: '',
+  checkForUpdates: true,
+  skippedVersion: '',
 };
 
 interface SettingsState {

@@ -1,10 +1,13 @@
-import { Plug, Unplug } from 'lucide-react';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { Download, Library, Plug, Unplug } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { connectObs, disconnectObs, useRecorder } from '../../lib/obs';
 import { getSecret, setSecret } from '../../lib/secrets';
 import { useSettings } from '../../lib/settings';
 import { Badge, Button, Callout, Card, Field, Input, errorMessage, toast } from '../ui';
 import { KEY_STORE } from '../../lib/platform';
+import { OBS_DOWNLOAD_URL, isObsInstalled } from '../../lib/requirements';
 
 export default function ConnectionCard() {
   const status = useRecorder((s) => s.status);
@@ -18,6 +21,11 @@ export default function ConnectionCard() {
   const [port, setPort] = useState(String(settings.obsPort));
   const [password, setPassword] = useState('');
   const [savedPassword, setSavedPassword] = useState<string | null>(null);
+  const [obsInstalled, setObsInstalled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    void isObsInstalled().then(setObsInstalled);
+  }, []);
 
   useEffect(() => {
     getSecret('obs_password')
@@ -93,10 +101,15 @@ export default function ConnectionCard() {
           />
         </Field>
 
-        {error && !connected && (
-          <Callout tone={connecting ? 'info' : 'warn'} title="Can't reach OBS">
-            {error}
-          </Callout>
+        {!connected && obsInstalled === false ? (
+          <ObsMissing />
+        ) : (
+          error &&
+          !connected && (
+            <Callout tone={connecting ? 'info' : 'warn'} title="Can't reach OBS">
+              {error}
+            </Callout>
+          )
         )}
         {error && connected && <Callout tone="warn">{error}</Callout>}
 
@@ -122,5 +135,34 @@ export default function ConnectionCard() {
         </div>
       </form>
     </Card>
+  );
+}
+
+// OBS isn't in any of its usual install folders. Recording is the only thing
+// that needs it, so point at importing as well as at the download.
+function ObsMissing() {
+  const navigate = useNavigate();
+  return (
+    <Callout tone="info" title="OBS Studio isn't installed">
+      <p>
+        Meeting Helper records through the free OBS Studio. You only need it for recording: you can already import
+        existing recordings and transcribe, edit and search them.
+      </p>
+      <div className="flex flex-wrap gap-2 pt-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="primary"
+          icon={Download}
+          onClick={() => openUrl(OBS_DOWNLOAD_URL).catch((err) => toast(errorMessage(err), 'error'))}
+        >
+          Download OBS
+        </Button>
+        <Button type="button" size="sm" icon={Library} onClick={() => navigate('/meetings')}>
+          Import a recording instead
+        </Button>
+      </div>
+      <p className="pt-2 text-xs">Installed it somewhere unusual? Start OBS and click Connect.</p>
+    </Callout>
   );
 }
