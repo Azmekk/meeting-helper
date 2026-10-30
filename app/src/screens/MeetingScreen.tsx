@@ -1,7 +1,7 @@
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { Crosshair, FileText, ListFilter, RotateCcw, Sparkles, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Crosshair, FileText, ListFilter, RotateCcw, Search, Sparkles, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DeleteMeetingModal } from '../components/meeting/actions';
@@ -26,6 +26,7 @@ import {
 } from '../components/ui';
 import * as db from '../lib/db';
 import { EXPORT_FORMATS, formatTranscript, safeFileName, type ExportFormat } from '../lib/export';
+import { highlightTerms, matchesQuery, parseQuery } from '../lib/search';
 import { onMeetingChanged, transcribeMeeting, useJobs, type Job, type JobStage } from '../lib/pipeline';
 import { useSettings } from '../lib/settings';
 import type { Meeting, ProviderId, Segment, Transcript, TranscriptDetail } from '../lib/types';
@@ -71,8 +72,10 @@ export default function MeetingScreen() {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [flashId, setFlashId] = useState<number | null>(null);
   const [follow, setFollow] = useState(true);
-  const [filter, setFilter] = useState('');
-  const [filterOpen, setFilterOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [matchIndex, setMatchIndex] = useState(0);
+  const [onlyMatches, setOnlyMatches] = useState(false);
+  const findRef = useRef<HTMLInputElement>(null);
   const [confirmDeleteTranscript, setConfirmDeleteTranscript] = useState(false);
   const [deletingTranscript, setDeletingTranscript] = useState(false);
   const [deleteMeetingOpen, setDeleteMeetingOpen] = useState(false);
@@ -237,6 +240,55 @@ export default function MeetingScreen() {
       setTimeout(() => setFlashId((cur) => (cur === seg.id ? null : cur)), 4000);
     }
   }, [detail, tParam, segParam, meetingId, seek]);
+
+  // ---------- Find in this meeting ----------
+
+  // Same rules as the Search screen (case, Bulgarian endings, "phrases").
+  const parsedQuery = useMemo(() => parseQuery(query), [query]);
+  const terms = useMemo(() => highlightTerms(query), [query]);
+  const matches = useMemo(
+    () => (parsedQuery.clauses.length && detail ? detail.segments.filter((s) => matchesQuery(s.text, parsedQuery)) : []),
+    [parsedQuery, detail],
+  );
+  const matchIds = useMemo(
+    () => (parsedQuery.clauses.length ? new Set(matches.map((s) => s.id)) : null),
+    [parsedQuery, matches],
+  );
+  const current = matches.length ? matches[Math.min(matchIndex, matches.length - 1)] : null;
+
+  // Moves to a match: scrolls it into view and puts the player there (paused).
+  const goToMatch = useCallback(
+    (index: number) => {
+      if (!matches.length) return;
+      const i = (index + matches.length) % matches.length;
+      const seg = matches[i];
+      setMatchIndex(i);
+      setFollow(false);
+      seek(seg.startMs, false);
+      requestAnimationFrame(() =>
+        document.querySelector(`[data-seg="${seg.id}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
+      );
+    },
+    [matches, seek],
+  );
+
+  // A new query starts again from the first match.
+  useEffect(() => {
+    setMatchIndex(0);
+  }, [query]);
+
+  // Ctrl+F focuses the find bar.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        findRef.current?.focus();
+        findRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // ---------- Edits (optimistic) ----------
 
@@ -560,36 +612,62 @@ export default function MeetingScreen() {
                   {segmentCount} segment{segmentCount === 1 ? '' : 's'}
                 </div>
                 <div className="ml-auto flex items-center gap-3">
-                  {filterOpen ? (
+                  <div className="flex items-center gap-1">
                     <div className="relative">
-                      <ListFilter size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
+                      <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
                       <Input
-                        autoFocus
-                        value={filter}
-                        onChange={(e) => setFilter(e.target.value)}
+                        ref={findRef}
+                        type="search"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
                         onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            goToMatch(current ? matchIndex + (e.shiftKey ? -1 : 1) : 0);
+                          }
                           if (e.key === 'Escape') {
-                            setFilter('');
-                            setFilterOpen(false);
+                            setQuery('');
+                            e.currentTarget.blur();
                           }
                         }}
-                        placeholder="Find in transcript"
-                        className="h-8 w-56 pr-8 pl-8 text-[13px]"
+                        placeholder="Search this meeting"
+                        title="Ctrl+F · Enter for next, Shift+Enter for previous"
+                        className="h-8 w-60 pr-[4.5rem] pl-8 text-[13px] [&::-webkit-search-cancel-button]:hidden"
                       />
-                      <IconButton
-                        size="sm"
-                        icon={X}
-                        label="Clear filter"
-                        onClick={() => {
-                          setFilter('');
-                          setFilterOpen(false);
-                        }}
-                        className="absolute top-1/2 right-1 -translate-y-1/2"
-                      />
+                      {query.trim() && (
+                        <span className="absolute top-1/2 right-7 -translate-y-1/2 text-xs text-faint tabular-nums">
+                          {matches.length ? `${Math.min(matchIndex, matches.length - 1) + 1}/${matches.length}` : '0'}
+                        </span>
+                      )}
+                      {query && (
+                        <IconButton
+                          size="sm"
+                          icon={X}
+                          label="Clear search"
+                          onClick={() => setQuery('')}
+                          className="absolute top-1/2 right-1 -translate-y-1/2"
+                        />
+                      )}
                     </div>
-                  ) : (
-                    <IconButton icon={ListFilter} label="Find in transcript" onClick={() => setFilterOpen(true)} />
-                  )}
+                    <IconButton
+                      icon={ChevronUp}
+                      label="Previous match"
+                      disabled={!matches.length}
+                      onClick={() => goToMatch(matchIndex - 1)}
+                    />
+                    <IconButton
+                      icon={ChevronDown}
+                      label="Next match"
+                      disabled={!matches.length}
+                      onClick={() => goToMatch(current ? matchIndex + 1 : 0)}
+                    />
+                    <IconButton
+                      icon={ListFilter}
+                      label={onlyMatches ? 'Show all lines' : 'Show only matching lines'}
+                      onClick={() => setOnlyMatches((v) => !v)}
+                      className={clsx(onlyMatches && 'bg-accent-soft text-accent hover:bg-accent-soft')}
+                    />
+                  </div>
                   {meeting.mediaPath && (
                     <>
                       <label className="flex cursor-pointer items-center gap-2 text-[13px] text-muted">
@@ -616,7 +694,10 @@ export default function MeetingScreen() {
                   colorOf={colorOf}
                   activeId={activeId}
                   flashId={flashId}
-                  filter={filter}
+                  terms={terms}
+                  matchIds={matchIds}
+                  currentMatchId={current?.id ?? null}
+                  onlyMatches={onlyMatches}
                   actions={actions}
                   onUserScroll={() => setFollow((f) => (f ? false : f))}
                 />

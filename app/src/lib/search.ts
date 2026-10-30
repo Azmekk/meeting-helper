@@ -71,6 +71,14 @@ export function parseQuery(query: string): ParsedQuery {
   return { clauses };
 }
 
+// Same matching rules as the database search, for text already in memory:
+// every clause must appear (any of its alternatives), case-insensitively.
+export function matchesQuery(text: string, parsed: ParsedQuery): boolean {
+  if (!parsed.clauses.length) return false;
+  const lower = text.toLowerCase();
+  return parsed.clauses.every((c) => c.alternatives.some((a) => lower.includes(a)));
+}
+
 // Every string the UI should highlight, longest first.
 export function highlightTerms(query: string): string[] {
   const all = new Set<string>();

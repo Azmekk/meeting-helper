@@ -1,6 +1,7 @@
 import { Check, Merge, Plus, Trash2, UserRound } from 'lucide-react';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { formatTimestamp } from '../../lib/format';
+import { splitHighlights } from '../../lib/search';
 import { speakerName, type Segment, type Speaker } from '../../lib/types';
 import { IconButton, Input, Textarea, clsx } from '../ui';
 import { MenuItem, MenuLabel, MenuSeparator, Popover, SpeakerDot, speakerChipStyle } from './shared';
@@ -20,7 +21,10 @@ export function TranscriptEditor({
   colorOf,
   activeId,
   flashId,
-  filter,
+  terms,
+  matchIds,
+  currentMatchId,
+  onlyMatches,
   actions,
   onUserScroll,
 }: {
@@ -29,33 +33,31 @@ export function TranscriptEditor({
   colorOf: (speakerId: number | null) => string;
   activeId: number | null;
   flashId: number | null;
-  filter: string;
+  // Highlighted strings from the find bar, longest first.
+  terms: string[];
+  // Segments that match the find bar, or null when it's empty.
+  matchIds: Set<number> | null;
+  currentMatchId: number | null;
+  // Hide segments that don't match.
+  onlyMatches: boolean;
   actions: SegmentActions;
   onUserScroll: () => void;
 }) {
   const speakerById = useMemo(() => new Map(speakers.map((s) => [s.id, s])), [speakers]);
-  const needle = filter.trim().toLocaleLowerCase();
+  const filtering = onlyMatches && matchIds != null;
 
   const visible = useMemo(() => {
     const lastId = segments.length ? segments[segments.length - 1].id : null;
-    const list = needle
-      ? segments.filter((s) => {
-          const sp = s.speakerId != null ? speakerById.get(s.speakerId) : undefined;
-          return (
-            s.text.toLocaleLowerCase().includes(needle) ||
-            (sp ? speakerName(sp).toLocaleLowerCase().includes(needle) : false)
-          );
-        })
-      : segments;
+    const list = filtering ? segments.filter((s) => matchIds.has(s.id)) : segments;
     return list.map((s, i) => ({
       seg: s,
-      showSpeaker: !!needle || i === 0 || list[i - 1].speakerId !== s.speakerId,
+      showSpeaker: filtering || i === 0 || list[i - 1].speakerId !== s.speakerId,
       isLast: s.id === lastId,
     }));
-  }, [segments, needle, speakerById]);
+  }, [segments, filtering, matchIds]);
 
-  if (needle && visible.length === 0) {
-    return <p className="px-3 py-10 text-center text-sm text-muted">No segments match “{filter.trim()}”.</p>;
+  if (filtering && visible.length === 0) {
+    return <p className="px-3 py-10 text-center text-sm text-muted">No lines match your search.</p>;
   }
 
   return (
@@ -72,7 +74,8 @@ export function TranscriptEditor({
           isLast={isLast}
           active={seg.id === activeId}
           flash={seg.id === flashId}
-          needle={needle}
+          current={seg.id === currentMatchId}
+          terms={matchIds?.has(seg.id) ? terms : NO_TERMS}
           actions={actions}
         />
       ))}
@@ -90,7 +93,8 @@ const SegmentRow = memo(function SegmentRow({
   isLast,
   active,
   flash,
-  needle,
+  current,
+  terms,
   actions,
 }: {
   segment: Segment;
@@ -102,7 +106,8 @@ const SegmentRow = memo(function SegmentRow({
   isLast: boolean;
   active: boolean;
   flash: boolean;
-  needle: string;
+  current: boolean;
+  terms: string[];
   actions: SegmentActions;
 }) {
   const [editing, setEditing] = useState(false);
@@ -187,7 +192,7 @@ const SegmentRow = memo(function SegmentRow({
             title="Click to edit"
             className="-mx-1.5 cursor-text rounded-md px-1.5 py-0.5 text-[15px] leading-7 whitespace-pre-wrap text-text"
           >
-            {seg.text ? highlight(seg.text, needle) : <span className="text-faint italic">(empty)</span>}
+            {seg.text ? highlight(seg.text, terms, current) : <span className="text-faint italic">(empty)</span>}
             {seg.edited && (
               <span className="ml-2 align-middle text-[11px] font-medium text-faint select-none" title="Edited by you">
                 edited
@@ -229,25 +234,22 @@ const SegmentRow = memo(function SegmentRow({
   );
 });
 
-function highlight(text: string, needle: string): ReactNode {
-  if (!needle) return text;
-  const lower = text.toLocaleLowerCase();
-  const out: ReactNode[] = [];
-  let i = 0;
-  let k = 0;
-  while (i < text.length) {
-    const j = lower.indexOf(needle, i);
-    if (j < 0) break;
-    if (j > i) out.push(text.slice(i, j));
-    out.push(
-      <mark key={k++} className="rounded-sm bg-highlight px-0.5 text-text">
-        {text.slice(j, j + needle.length)}
-      </mark>,
-    );
-    i = j + needle.length;
-  }
-  out.push(text.slice(i));
-  return out;
+const NO_TERMS: string[] = [];
+
+function highlight(text: string, terms: string[], current: boolean): ReactNode {
+  if (!terms.length) return text;
+  return splitHighlights(text, terms).map((p, i) =>
+    p.match ? (
+      <mark
+        key={i}
+        className={clsx('rounded-sm px-0.5 text-text', current ? 'bg-accent-soft ring-2 ring-accent' : 'bg-highlight')}
+      >
+        {p.text}
+      </mark>
+    ) : (
+      p.text
+    ),
+  );
 }
 
 function SegmentTextEditor({
