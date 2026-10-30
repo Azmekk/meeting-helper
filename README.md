@@ -9,6 +9,10 @@
   and search every meeting by word to jump to the moment it was said.
 </p>
 
+<p align="center">
+  <a href="https://meetinghelper.vexbyte.com/"><b>Website</b></a> · <a href="../../releases/latest"><b>Download</b></a>
+</p>
+
 ---
 
 - **Record** through OBS Studio, controlled from the app: codec, quality, format and output folder.
@@ -24,7 +28,7 @@ Everything stays on your computer except the audio sent to the transcription pro
 
 ## Install
 
-Download the latest build from the [Releases](../../releases) page:
+Download the latest build from the [website](https://meetinghelper.vexbyte.com/) or the [Releases](../../releases) page:
 
 | System | File |
 |---|---|
