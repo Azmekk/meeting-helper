@@ -110,9 +110,10 @@ bun run tauri dev
 
 ### Download page
 
-[`site/`](site/) is the download page: plain HTML with no build step.
-[`.github/workflows/pages.yml`](.github/workflows/pages.yml) publishes it to GitHub Pages whenever
-it changes on `main`. Its download buttons read the latest published release from the GitHub API.
+[`site/`](site/) is the download page: plain HTML with no build step. It's served by Cloudflare
+Workers using [`wrangler.jsonc`](wrangler.jsonc); run `npx wrangler deploy` to publish it, or connect
+the repo in Cloudflare so every push to `main` deploys it. Its download buttons read the latest
+published release from the GitHub API.
 
 ### Releasing
 
