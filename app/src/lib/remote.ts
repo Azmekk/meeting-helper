@@ -14,7 +14,7 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { register, unregister } from '@tauri-apps/plugin-global-shortcut';
 import { create } from 'zustand';
-import { errorMessage } from '../components/ui';
+import { errorMessage } from './errors';
 import { diffSnapshot, type FromPhone, type ToPhone } from '../remote/protocol';
 import { isHidden, setHiddenFlag } from './hidden';
 import { OVERLAY_LABEL, getLiveSnapshot, helpMeAnswer, setLiveModel, useLive, type LiveSnapshot } from './live';

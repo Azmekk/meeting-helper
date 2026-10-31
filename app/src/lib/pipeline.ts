@@ -3,7 +3,8 @@
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { exists, mkdir, remove } from '@tauri-apps/plugin-fs';
 import { create } from 'zustand';
-import { errorMessage, toast } from '../components/ui';
+import { errorMessage } from './errors';
+import { toast } from './toast';
 import * as db from './db';
 import * as native from './native';
 import { getProvider } from './providers';

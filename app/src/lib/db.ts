@@ -1,4 +1,3 @@
-// OWNER: data agent.
 // SQLite through @tauri-apps/plugin-sql (`sqlite:meeting-helper.db`).
 //
 // plugin-sql caveats this module is written around:
@@ -8,10 +7,15 @@
 //   explicitly rather than through ON DELETE CASCADE.
 import Database from '@tauri-apps/plugin-sql';
 import type {
+  ActionItem,
+  ActionItemStatus,
   AiDoc,
   AiDocKind,
   AiScope,
   ChatMessage,
+  ExtractionField,
+  ExtractionRow,
+  ExtractionTemplate,
   Folder,
   Meeting,
   MeetingStatus,
@@ -24,8 +28,6 @@ import type {
   TranscriptSource,
 } from './types';
 import { buildSearchSql } from './search';
-// Phase 4 (folders) types, on their own line to keep parallel edits apart.
-import type { ActionItem, ActionItemStatus, ExtractionField, ExtractionRow, ExtractionTemplate } from './types';
 
 let db: Database | null = null;
 
@@ -962,10 +964,6 @@ export async function clearChat(scope: AiScope, ownerId: number): Promise<void> 
 
 export type { Segment };
 
-// =====================================================================
-// Phase 4: folders on disk, folder AI data, meeting bundles.
-// =====================================================================
-
 // ---------- Meeting/folder lookups ----------
 
 export async function getMeetingByUid(uid: string): Promise<Meeting | null> {
@@ -1582,9 +1580,7 @@ export async function updateTranscriptStats(
   await touch('transcript', transcriptId);
 }
 
-// =====================================================================
-// Phase 6: backup state and folder bundles (folder.json).
-// =====================================================================
+// ---------- Folder change tracking ----------
 
 // Folder-level data (folder summary, chat, templates, unattached action items)
 // lives in folder.json; folders.updated_at tells backup and the sidecar writer

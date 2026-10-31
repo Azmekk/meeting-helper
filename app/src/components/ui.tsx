@@ -19,10 +19,11 @@ import {
   type TextareaHTMLAttributes,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { create } from 'zustand';
-import { isHidden } from '../lib/hidden';
+import { useToasts } from '../lib/toast';
 
 export { clsx };
+export { toast } from '../lib/toast';
+export { errorMessage } from '../lib/errors';
 
 // ---------- Motion ----------
 // Elements animate in with data-motion="fade|pop|drop|rise|up|down" (keyframes
@@ -916,33 +917,7 @@ export function Modal({
 
 // ---------- Toasts ----------
 
-type ToastTone = 'info' | 'success' | 'error';
-interface ToastItem {
-  id: number;
-  tone: ToastTone;
-  message: string;
-  leaving?: boolean;
-}
-
-const useToasts = create<{ items: ToastItem[] }>(() => ({ items: [] }));
-let toastId = 0;
-
-// Fire-and-forget notification, usable from anywhere (including non-React code).
-export function toast(message: string, tone: ToastTone = 'info'): void {
-  // Secret mode: nothing may pop up while the window is hidden, not even later.
-  if (isHidden()) return;
-  const id = ++toastId;
-  useToasts.setState((s) => ({ items: [...s.items, { id, tone, message }] }));
-  // Fade out first, then drop it.
-  setTimeout(
-    () => {
-      useToasts.setState((s) => ({ items: s.items.map((t) => (t.id === id ? { ...t, leaving: true } : t)) }));
-      setTimeout(() => useToasts.setState((s) => ({ items: s.items.filter((t) => t.id !== id) })), EXIT_MS);
-    },
-    tone === 'error' ? 8000 : 4000,
-  );
-}
-
+// Raised with toast() from lib/toast.ts (re-exported here for components).
 export function Toaster() {
   const items = useToasts((s) => s.items);
   return (
@@ -969,15 +944,4 @@ export function Toaster() {
       })}
     </div>
   );
-}
-
-// Turns unknown thrown values into a readable message.
-export function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return String(err);
-  }
 }

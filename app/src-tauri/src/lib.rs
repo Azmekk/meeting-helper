@@ -35,7 +35,7 @@ pub fn run() {
             upload::upload_multipart,
             files::move_path,
             files::copy_file_progress,
-            // Phase 6: backup (zip + S3)
+            // Backup (zip + S3)
             bundle::export_zip,
             bundle::import_zip,
             bundle::read_zip_text,

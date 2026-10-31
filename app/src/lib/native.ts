@@ -85,7 +85,7 @@ export function copyFileProgress(src: string, dst: string, onProgress?: (p: Copy
   return invoke('copy_file_progress', { src, dst, onProgress: progressChannel(onProgress) });
 }
 
-// ---------- Phase 6: backup (bundle.rs, s3.rs) ----------
+// ---------- Backup (bundle.rs, s3.rs) ----------
 
 // Writes a zip: whole directories under a prefix (minus `skip` top-level
 // names) plus single files. Resolves with the number of files written.

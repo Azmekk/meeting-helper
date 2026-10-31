@@ -3,7 +3,7 @@
 // whole folder never fits in one prompt, so each step reads one meeting (or
 // summaries) and chat fetches what it needs through read-only tools.
 import { create } from 'zustand';
-import { toast } from '../../components/ui';
+import { toast } from '../toast';
 import * as db from '../db';
 import { formatDate, formatDuration, formatTimestamp } from '../format';
 import { getSettings } from '../settings';

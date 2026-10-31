@@ -1,4 +1,4 @@
-// OWNER: data agent. Query parsing for full-text search over transcripts.
+// Query parsing for full-text search over transcripts.
 //
 // The index is an FTS5 table with the `trigram` tokenizer, so every query
 // string of 3+ characters matches as a case-insensitive substring (Cyrillic

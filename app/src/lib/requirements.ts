@@ -3,7 +3,7 @@
 import { homeDir, join } from '@tauri-apps/api/path';
 import { exists } from '@tauri-apps/plugin-fs';
 import { create } from 'zustand';
-import { errorMessage } from '../components/ui';
+import { errorMessage } from './errors';
 import { ffmpegVersion } from './native';
 import { IS_MAC, IS_WINDOWS } from './platform';
 import { getSettings } from './settings';
