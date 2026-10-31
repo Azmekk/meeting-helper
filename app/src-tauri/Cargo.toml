@@ -1,6 +1,6 @@
 [package]
 name = "meeting-helper"
-version = "0.3.0"
+version = "1.0.0"
 description = "Record, transcribe and search meetings"
 authors = ["you"]
 edition = "2024"
