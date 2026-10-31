@@ -205,16 +205,23 @@ const controlClass =
   'transition-[background-color,border-color,box-shadow,color] hover:bg-fill-strong focus:border-accent focus:bg-panel ' +
   'focus:outline-none focus:ring-[3px] focus:ring-accent/20 disabled:opacity-60';
 
+// controlClass makes fields full width. A width passed by the caller (w-auto,
+// w-48…) replaces that default; with both, CSS order decides and the caller's
+// width could silently lose.
+function controlFor(className?: string): string {
+  return /(^|\s)!?w-/.test(className ?? '') ? controlClass.replace('w-full ', '') : controlClass;
+}
+
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input(
   { className, ...rest },
   ref,
 ) {
-  return <input ref={ref} className={clsx(controlClass, 'h-9 rounded-full', className)} {...rest} />;
+  return <input ref={ref} className={clsx(controlFor(className), 'h-9 rounded-full', className)} {...rest} />;
 });
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
   function Textarea({ className, ...rest }, ref) {
-    return <textarea ref={ref} className={clsx(controlClass, 'rounded-field py-2.5 leading-relaxed', className)} {...rest} />;
+    return <textarea ref={ref} className={clsx(controlFor(className), 'rounded-field py-2.5 leading-relaxed', className)} {...rest} />;
   },
 );
 
@@ -404,7 +411,7 @@ export function Select({
         onClick={() => (open ? hide() : show())}
         onKeyDown={onKeyDown}
         className={clsx(
-          !plain && controlClass,
+          !plain && controlFor(className),
           !plain && 'h-9 rounded-full',
           'flex cursor-pointer items-center gap-2 text-left disabled:cursor-default',
           className,

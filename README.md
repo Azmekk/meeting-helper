@@ -87,7 +87,7 @@ The app tells you if ffmpeg or OBS is missing, and when a new version is out.
 
 1. In OBS: **Tools → WebSocket Server Settings → Enable WebSocket server**, then **Show Connect Info** and copy the password.
 2. In the app: **Record**, paste the password, **Connect**. The app sets up OBS's audio tracks and recording output for you.
-3. Wear headphones (otherwise your mic also picks up the other people), press record, then stop. The recording is converted to MP4 and transcribed automatically.
+3. Wear headphones (otherwise your mic also picks up the other people), press record, then stop. The recording is converted to MP4, and the app asks whether to transcribe it and write a summary, so a test or a few seconds of silence don't cost anything.
 
 <div align="center">
 <img src="docs/screenshots/record-live-dark.webp" alt="The Record screen during a meeting: the running timer and stop button, the live Bulgarian/English transcript, a suggested answer and rolling AI notes" width="620">

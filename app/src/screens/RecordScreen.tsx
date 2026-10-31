@@ -13,7 +13,7 @@ export default function RecordScreen() {
     <div className="mx-auto max-w-7xl px-8 py-8">
       <PageHeader
         title="Record"
-        description="Record an online meeting with OBS. When you stop, it's imported and transcribed automatically."
+        description="Record an online meeting with OBS. When you stop, it's saved to Meetings and you choose whether to transcribe it."
       />
       <div className="space-y-6">
         <RecordPanel />
