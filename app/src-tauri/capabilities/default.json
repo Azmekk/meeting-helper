@@ -7,6 +7,17 @@
   ],
   "permissions": [
     "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-set-content-protected",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-skip-taskbar",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-is-registered",
     "opener:default",
     "sql:default",
     "sql:allow-execute",
@@ -23,7 +34,14 @@
         },
         {
           "url": "https://api.github.com/repos/Azmekk/meeting-helper/*"
-        }
+        },
+        { "url": "https://api.anthropic.com/*" },
+        { "url": "https://api.openai.com/*" },
+        { "url": "https://api.deepseek.com/*" },
+        { "url": "https://openrouter.ai/*" },
+        { "url": "http://localhost:*/*" },
+        { "url": "http://127.0.0.1:*/*" },
+        { "url": "https://*/*" }
       ]
     },
     "fs:default",

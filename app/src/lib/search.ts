@@ -137,7 +137,8 @@ export interface SearchSql {
 
 // Builds the search statement ($1, $2 … placeholders, as plugin-sql expects for
 // SQLite). Returns null for an empty query.
-export function buildSearchSql(query: string, limit: number): SearchSql | null {
+// `folderId` limits the search to one folder's meetings (folder AI tools).
+export function buildSearchSql(query: string, limit: number, opts: { folderId?: number } = {}): SearchSql | null {
   const { clauses } = parseQuery(query);
   if (!clauses.length) return null;
 
@@ -167,6 +168,7 @@ export function buildSearchSql(query: string, limit: number): SearchSql | null {
     const ors = c.alternatives.flatMap((a) => caseVariants(a).map((v) => `instr(s.text, ${p(v)}) > 0`));
     where.push('(' + ors.join(' OR ') + ')');
   }
+  if (opts.folderId != null) where.push(`m.folder_id = ${p(opts.folderId)}`);
 
   const sql = `
     SELECT m.id AS meeting_id, m.title AS meeting_title, m.created_at AS meeting_created_at,

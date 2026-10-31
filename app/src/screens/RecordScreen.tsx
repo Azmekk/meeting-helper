@@ -1,3 +1,4 @@
+import LivePanel from '../components/record/LivePanel';
 import ConnectionCard from '../components/record/ConnectionCard';
 import ObsSetupGuide from '../components/record/ObsSetupGuide';
 import OutputSettingsCard from '../components/record/OutputSettingsCard';
@@ -16,6 +17,7 @@ export default function RecordScreen() {
       />
       <div className="space-y-6">
         <RecordPanel />
+        <LivePanel />
         {connected ? (
           <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
             <div className="space-y-6">

@@ -10,6 +10,7 @@ import { getProvider } from './providers';
 import type { ProviderResult } from './providers/types';
 import { getSecret } from './secrets';
 import { buildSegments, labelSpeakers, languageMix } from './segments';
+import { meetingTerms } from './terms';
 import { getSettings } from './settings';
 import type { ProviderId } from './types';
 
@@ -77,30 +78,65 @@ async function meetingDir(meetingId: number, ...parts: string[]): Promise<string
   return dir;
 }
 
+// Removes the app's own files for a meeting (appData/meetings/<id>/: imported
+// media copies, leftover work files). Never touches the user's recordings.
+export async function deleteMeetingFiles(meetingId: number): Promise<void> {
+  const dir = await join(await appDataDir(), 'meetings', String(meetingId));
+  if (await exists(dir)) await remove(dir, { recursive: true });
+}
+
 // ---------------------------------------------------------------------------
 // Ingest
 
-// Takes a finished OBS recording or a user-picked file: creates the meeting,
-// remuxes .mkv to .mp4 if needed, probes duration, then starts transcription
-// in the background if `autoTranscribe` is on. Resolves with the meeting id as
-// soon as the meeting row exists (before transcription finishes).
+// Takes a finished OBS recording or a user-picked file: creates the meeting
+// (or fills in the row made when recording started), remuxes .mkv to .mp4 if
+// needed, probes duration, then starts transcription in the background if
+// `autoTranscribe` is on and it wasn't transcribed live. Resolves with the
+// meeting id once the row is updated (before transcription finishes).
 // `fromRecording`: the file is our own OBS output, so the .mkv may be deleted
 // after remuxing (per the keepOriginalMkv setting). Never delete imported files.
+// `meetingId`: the 'recording' row to update instead of inserting a new one.
 export async function ingestMedia(
   path: string,
   title: string,
-  opts: { fromRecording?: boolean } = {},
+  opts: { fromRecording?: boolean; meetingId?: number } = {},
 ): Promise<number> {
   const settings = getSettings();
-  const info = await native.probeMedia(path, settings.ffmpegPath);
+  const existing = opts.meetingId != null ? await db.getMeeting(opts.meetingId) : null;
 
-  const id = await db.createMeeting({
-    title,
-    sourcePath: path,
-    mediaPath: null,
-    status: 'queued',
-    durationMs: info.durationMs,
-  });
+  let info: native.MediaInfo;
+  try {
+    info = await native.probeMedia(path, settings.ffmpegPath);
+  } catch (err) {
+    // Don't leave the row stuck in 'recording'.
+    if (existing) {
+      await db
+        .updateMeeting(existing.id, {
+          title,
+          sourcePath: path,
+          status: 'error',
+          error: `Couldn't read the recording: ${errorMessage(err)}`,
+        })
+        .catch(() => {});
+      emitMeetingChanged(existing.id);
+    }
+    throw err;
+  }
+
+  let id: number;
+  if (existing) {
+    id = existing.id;
+    await db.updateMeeting(id, { title, sourcePath: path, status: 'queued', error: null, durationMs: info.durationMs });
+    emitMeetingChanged(id);
+  } else {
+    id = await db.createMeeting({
+      title,
+      sourcePath: path,
+      mediaPath: null,
+      status: 'queued',
+      durationMs: info.durationMs,
+    });
+  }
 
   let mediaPath = path;
   let sourcePath: string | null = path;
@@ -135,7 +171,14 @@ export async function ingestMedia(
   await db.updateMeeting(id, { mediaPath, sourcePath, durationMs: info.durationMs });
   emitMeetingChanged(id);
 
-  if (settings.autoTranscribe) void transcribeMeeting(id);
+  // A recording transcribed live is already usable; live.ts asks whether to
+  // also run the batch transcription instead of starting it automatically.
+  if (existing && (await db.hasLiveTranscript(id))) {
+    await db.updateMeeting(id, { status: 'ready', error: null });
+    emitMeetingChanged(id);
+  } else if (settings.autoTranscribe) {
+    void transcribeMeeting(id);
+  }
   return id;
 }
 
@@ -177,7 +220,7 @@ export async function transcribeMeeting(meetingId: number, providerId?: Provider
 
     const info = await native.probeMedia(input, settings.ffmpegPath);
     if (info.audioStreams.length === 0) throw new Error('This file has no audio track.');
-    const split = settings.splitTracks && info.audioStreams.length >= 3;
+    const split = (meeting.splitTracks ?? settings.splitTracks) && info.audioStreams.length >= 3;
 
     // 1. Extract 16 kHz mono FLAC(s) into the meeting's work folder.
     update('extracting', 'Extracting audio…');
@@ -200,7 +243,7 @@ export async function transcribeMeeting(meetingId: number, providerId?: Provider
       update(stage, text);
     };
     update('transcribing', `Transcribing with ${provider.name}…`);
-    const options = { languages: settings.languages, terms: settings.terms };
+    const options = { languages: settings.languages, terms: await meetingTerms(meeting) };
     const [desktop, mic] = await Promise.all([
       provider.transcribe(desktopFile, apiKey, { ...options, diarize: true, onProgress: track('Desktop') }),
       micFile

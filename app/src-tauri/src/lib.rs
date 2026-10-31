@@ -1,10 +1,22 @@
+mod bundle;
+mod files;
+mod live;
 mod media;
+mod remote;
+mod s3;
 mod secrets;
 mod upload;
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    builder
+        .manage(live::LiveState::default())
+        .manage(remote::RemoteState::default())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -20,7 +32,34 @@ pub fn run() {
             media::extract_audio,
             media::remux_to_mp4,
             upload::upload_multipart,
+            files::move_path,
+            files::copy_file_progress,
+            // Phase 6: backup (zip + S3)
+            bundle::export_zip,
+            bundle::import_zip,
+            s3::s3_test,
+            s3::s3_list,
+            s3::s3_put_file,
+            s3::s3_get_file,
+            s3::s3_put_bytes,
+            s3::s3_get_bytes,
+            s3::s3_delete,
+            live::live_start,
+            live::live_stop,
+            remote::remote_start,
+            remote::remote_stop,
+            remote::remote_status,
+            remote::remote_pair,
+            remote::remote_broadcast,
         ])
+        // The overlay would otherwise keep the app running after the main window closes.
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed)
+                && let Some(overlay) = window.app_handle().get_webview_window("overlay")
+            {
+                let _ = overlay.close();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

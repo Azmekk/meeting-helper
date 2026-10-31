@@ -1,15 +1,22 @@
-import { CircleDot, Library, Search, Settings as SettingsIcon, type LucideIcon } from 'lucide-react';
+import { CircleDot, Folder, Library, Search, Settings as SettingsIcon, type LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom';
 import logo from './assets/logo.svg';
 import { FfmpegDialog } from './components/FfmpegDialog';
 import { SidebarUpdateNotice, UpdateDialog } from './components/UpdateNotice';
 import { Callout, Spinner, Toaster, clsx, errorMessage } from './components/ui';
+import { LiveAfterStopDialog } from './components/live/LiveAfterStopDialog';
 import { initDb } from './lib/db';
+import { initLive } from './lib/live';
+import { initRemote } from './lib/remote';
 import { initRecorder, useRecorder } from './lib/obs';
 import { useJobs } from './lib/pipeline';
 import { useSettings } from './lib/settings';
 import { initUpdateCheck } from './lib/updates';
+import { initFolderAi } from './lib/ai/folder';
+import { initSidecars } from './lib/bundle';
+import { initBackup } from './lib/backup';
+import FoldersScreen from './screens/FoldersScreen';
 import MeetingScreen from './screens/MeetingScreen';
 import MeetingsScreen from './screens/MeetingsScreen';
 import RecordScreen from './screens/RecordScreen';
@@ -25,7 +32,12 @@ export default function App() {
         await useSettings.getState().load();
         await initDb();
         initRecorder();
+        initLive();
+        initRemote();
         initUpdateCheck();
+        initSidecars();
+        initFolderAi();
+        initBackup();
         setBoot('ready');
       } catch (err) {
         setBoot({ error: errorMessage(err) });
@@ -59,6 +71,8 @@ export default function App() {
           <Route path="/record" element={<RecordScreen />} />
           <Route path="/meetings" element={<MeetingsScreen />} />
           <Route path="/meetings/:id" element={<MeetingScreen />} />
+          <Route path="/folders" element={<FoldersScreen />} />
+          <Route path="/folders/:id" element={<FoldersScreen />} />
           <Route path="/search" element={<SearchScreen />} />
           <Route path="/settings" element={<SettingsScreen />} />
           <Route path="*" element={<Navigate to="/meetings" replace />} />
@@ -66,6 +80,7 @@ export default function App() {
       </main>
       <FfmpegDialog />
       <UpdateDialog />
+      <LiveAfterStopDialog />
       <Toaster />
     </div>
   );
@@ -92,6 +107,7 @@ function Sidebar() {
         <NavItem to="/meetings" icon={Library} label="Meetings">
           {activeJobs > 0 && <Spinner size={13} />}
         </NavItem>
+        <NavItem to="/folders" icon={Folder} label="Folders" />
         <NavItem to="/search" icon={Search} label="Search" />
       </div>
 

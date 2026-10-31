@@ -3,7 +3,17 @@
 // the settings file.
 import { invoke } from '@tauri-apps/api/core';
 
-export type SecretName = 'soniox_api_key' | 'elevenlabs_api_key' | 'obs_password';
+export type SecretName =
+  | 'soniox_api_key'
+  | 'elevenlabs_api_key'
+  | 'obs_password'
+  | 'anthropic_api_key'
+  | 'openai_api_key'
+  | 'deepseek_api_key'
+  | 'custom_ai_api_key'
+  | 's3_access_key_id'
+  | 's3_secret_access_key'
+  | 'remote_key';
 
 // Resolves to null when nothing is stored.
 export function getSecret(name: SecretName): Promise<string | null> {

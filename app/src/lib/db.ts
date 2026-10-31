@@ -7,8 +7,25 @@
 // - PRAGMA foreign_keys is per connection, so child rows are deleted
 //   explicitly rather than through ON DELETE CASCADE.
 import Database from '@tauri-apps/plugin-sql';
-import type { Meeting, MeetingStatus, ProviderId, SearchHit, Segment, Speaker, Transcript, TranscriptDetail } from './types';
+import type {
+  AiDoc,
+  AiDocKind,
+  AiScope,
+  ChatMessage,
+  Folder,
+  Meeting,
+  MeetingStatus,
+  ProviderId,
+  SearchHit,
+  Segment,
+  Speaker,
+  Transcript,
+  TranscriptDetail,
+  TranscriptSource,
+} from './types';
 import { buildSearchSql } from './search';
+// Phase 4 (folders) types, on their own line to keep parallel edits apart.
+import type { ActionItem, ActionItemStatus, ExtractionField, ExtractionRow, ExtractionTemplate } from './types';
 
 let db: Database | null = null;
 
@@ -19,10 +36,12 @@ function conn(): Database {
 
 // ---------- Schema ----------
 
-// Each entry migrates from version i to i+1. Statements run one at a time and
-// are idempotent (IF NOT EXISTS), so a migration interrupted halfway can be
-// re-run safely. To add v2, append another array.
-const MIGRATIONS: string[][] = [
+// Each entry migrates from version i to i+1. Steps run one at a time and are
+// idempotent (IF NOT EXISTS, addColumn), so a migration interrupted halfway can
+// be re-run safely. A step is SQL or a function for logic SQL can't express.
+type MigrationStep = string | ((d: Database) => Promise<void>);
+
+const MIGRATIONS: MigrationStep[][] = [
   // v1
   [
     `CREATE TABLE IF NOT EXISTS meetings (
@@ -66,8 +85,8 @@ const MIGRATIONS: string[][] = [
     `CREATE INDEX IF NOT EXISTS idx_speakers_transcript ON speakers(transcript_id)`,
     `CREATE INDEX IF NOT EXISTS idx_segments_transcript_start ON segments(transcript_id, start_ms)`,
     `CREATE INDEX IF NOT EXISTS idx_segments_speaker ON segments(speaker_id)`,
-    // FTS (trigram). Created by createFtsTable() below so a failure gets a clear message.
-    'FTS',
+    // FTS (trigram). A function so a failure gets a clear message.
+    createFtsTable,
     `CREATE TRIGGER IF NOT EXISTS segments_ai AFTER INSERT ON segments BEGIN
       INSERT INTO segments_fts(rowid, text) VALUES (new.id, new.text);
     END`,
@@ -79,7 +98,112 @@ const MIGRATIONS: string[][] = [
       INSERT INTO segments_fts(rowid, text) VALUES (new.id, new.text);
     END`,
   ],
+  // v2: folders, change tracking, AI data, live transcripts
+  [
+    (d) => addColumn(d, 'meetings', 'uid', 'TEXT'),
+    (d) => addColumn(d, 'meetings', 'folder_id', 'INTEGER'),
+    (d) => addColumn(d, 'meetings', 'dir_path', 'TEXT'),
+    (d) => addColumn(d, 'meetings', 'updated_at', 'TEXT'),
+    (d) => addColumn(d, 'meetings', 'briefing', 'TEXT'),
+    backfillMeetingUids,
+    `UPDATE meetings SET updated_at = created_at WHERE updated_at IS NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_uid ON meetings(uid)`,
+    `CREATE INDEX IF NOT EXISTS idx_meetings_folder ON meetings(folder_id)`,
+    `CREATE TABLE IF NOT EXISTS folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uid TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      dir_name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      briefing TEXT
+    )`,
+    (d) => addColumn(d, 'transcripts', 'source', "TEXT NOT NULL DEFAULT 'async'"),
+    `CREATE TABLE IF NOT EXISTS ai_docs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL,
+      owner_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      content TEXT NOT NULL,
+      model TEXT,
+      created_at TEXT NOT NULL,
+      cost_usd REAL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_ai_docs_owner ON ai_docs(scope, owner_id, kind)`,
+    `CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL,
+      owner_id INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_chat_messages_owner ON chat_messages(scope, owner_id, id)`,
+    `CREATE TABLE IF NOT EXISTS action_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      folder_id INTEGER,
+      meeting_id INTEGER,
+      text TEXT NOT NULL,
+      owner TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      first_seen_meeting INTEGER,
+      last_update_meeting INTEGER,
+      source_ms INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_action_items_folder ON action_items(folder_id, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_action_items_meeting ON action_items(meeting_id)`,
+    `CREATE TABLE IF NOT EXISTS extraction_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      folder_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      fields_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_extraction_templates_folder ON extraction_templates(folder_id)`,
+    `CREATE TABLE IF NOT EXISTS extraction_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      template_id INTEGER NOT NULL,
+      meeting_id INTEGER NOT NULL,
+      values_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_extraction_rows_template ON extraction_rows(template_id, meeting_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_extraction_rows_meeting ON extraction_rows(meeting_id)`,
+  ],
+  // v3: backup state, folder change tracking (folder.json)
+  [
+    (d) => addColumn(d, 'folders', 'updated_at', 'TEXT'),
+    `UPDATE folders SET updated_at = created_at WHERE updated_at IS NULL`,
+    // One row per backed-up meeting or folder (kind), keyed by its uid.
+    // files_json: [{ name, size, mtime, etag, uploadId? }] for the media files.
+    `CREATE TABLE IF NOT EXISTS backup_state (
+      uid TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT 'meeting',
+      uploaded_at TEXT,
+      updated_at TEXT,
+      files_json TEXT NOT NULL DEFAULT '[]'
+    )`,
+  ],
+  // v4: per-meeting override of the split-mic setting
+  [(d) => addColumn(d, 'meetings', 'split_tracks', 'INTEGER')],
+  // v5: vocabulary per folder and per meeting (one term per line)
+  [(d) => addColumn(d, 'meetings', 'terms', 'TEXT'), (d) => addColumn(d, 'folders', 'terms', 'TEXT')],
 ];
+
+// SQLite has no ADD COLUMN IF NOT EXISTS; check first so re-runs are safe.
+async function addColumn(d: Database, table: string, column: string, decl: string): Promise<void> {
+  const cols = await d.select<{ name: string }[]>(`PRAGMA table_info(${table})`);
+  if (cols.some((c) => c.name === column)) return;
+  await d.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+}
+
+async function backfillMeetingUids(d: Database): Promise<void> {
+  const rows = await d.select<{ id: number }[]>('SELECT id FROM meetings WHERE uid IS NULL');
+  for (const r of rows) {
+    await d.execute('UPDATE meetings SET uid = $1 WHERE id = $2', [crypto.randomUUID(), r.id]);
+  }
+}
 
 async function createFtsTable(d: Database): Promise<void> {
   try {
@@ -115,9 +239,9 @@ export async function initDb(): Promise<void> {
   const rows = await d.select<{ user_version: number }[]>('PRAGMA user_version');
   const current = Number(rows[0]?.user_version ?? 0);
   for (let v = current; v < MIGRATIONS.length; v++) {
-    for (const stmt of MIGRATIONS[v]) {
-      if (stmt === 'FTS') await createFtsTable(d);
-      else await d.execute(stmt);
+    for (const step of MIGRATIONS[v]) {
+      if (typeof step === 'string') await d.execute(step);
+      else await step(d);
     }
     await d.execute(`PRAGMA user_version = ${v + 1}`);
   }
@@ -128,6 +252,7 @@ export async function initDb(): Promise<void> {
 
 interface MeetingRow {
   id: number;
+  uid: string;
   title: string;
   created_at: string;
   duration_ms: number | null;
@@ -136,6 +261,22 @@ interface MeetingRow {
   status: MeetingStatus;
   error: string | null;
   active_transcript_id: number | null;
+  folder_id: number | null;
+  dir_path: string | null;
+  updated_at: string | null;
+  briefing: string | null;
+  split_tracks: number | null;
+  terms: string | null;
+}
+
+interface FolderRow {
+  id: number;
+  uid: string;
+  name: string;
+  dir_name: string;
+  created_at: string;
+  briefing: string | null;
+  terms: string | null;
 }
 
 interface TranscriptRow {
@@ -143,6 +284,7 @@ interface TranscriptRow {
   meeting_id: number;
   provider: ProviderId;
   model: string;
+  source: TranscriptSource | null;
   created_at: string;
   cost_usd: number | null;
   languages: string | null;
@@ -168,6 +310,7 @@ interface SegmentRow {
 
 const toMeeting = (r: MeetingRow): Meeting => ({
   id: r.id,
+  uid: r.uid,
   title: r.title,
   createdAt: r.created_at,
   durationMs: r.duration_ms,
@@ -176,13 +319,33 @@ const toMeeting = (r: MeetingRow): Meeting => ({
   status: r.status,
   error: r.error,
   activeTranscriptId: r.active_transcript_id,
+  folderId: r.folder_id,
+  dirPath: r.dir_path,
+  updatedAt: r.updated_at ?? r.created_at,
+  briefing: r.briefing,
+  splitTracks: r.split_tracks == null ? null : !!r.split_tracks,
+  terms: splitTerms(r.terms),
 });
+
+const toFolder = (r: FolderRow): Folder => ({
+  id: r.id,
+  uid: r.uid,
+  name: r.name,
+  dirName: r.dir_name,
+  createdAt: r.created_at,
+  briefing: r.briefing,
+  terms: splitTerms(r.terms),
+});
+
+const splitTerms = (text: string | null): string[] => (text ? text.split('\n').filter(Boolean) : []);
+const joinTerms = (terms: string[]): string | null => (terms.length ? terms.join('\n') : null);
 
 const toTranscript = (r: TranscriptRow): Transcript => ({
   id: r.id,
   meetingId: r.meeting_id,
   provider: r.provider,
   model: r.model,
+  source: r.source ?? 'async',
   createdAt: r.created_at,
   costUsd: r.cost_usd,
   languages: r.languages,
@@ -214,6 +377,23 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+// ---------- Change tracking ----------
+
+// Every write that changes a meeting's content bumps meetings.updated_at so
+// backup can tell what changed. Each entry resolves the meeting from a child id.
+const TOUCH_SQL = {
+  meeting: 'UPDATE meetings SET updated_at = $1 WHERE id = $2',
+  transcript: 'UPDATE meetings SET updated_at = $1 WHERE id = (SELECT meeting_id FROM transcripts WHERE id = $2)',
+  segment: `UPDATE meetings SET updated_at = $1 WHERE id = (
+    SELECT t.meeting_id FROM segments s JOIN transcripts t ON t.id = s.transcript_id WHERE s.id = $2)`,
+  speaker: `UPDATE meetings SET updated_at = $1 WHERE id = (
+    SELECT t.meeting_id FROM speakers sp JOIN transcripts t ON t.id = sp.transcript_id WHERE sp.id = $2)`,
+} as const;
+
+async function touch(kind: keyof typeof TOUCH_SQL, id: number): Promise<void> {
+  await conn().execute(TOUCH_SQL[kind], [now(), id]);
+}
+
 // ---------- Meetings ----------
 
 export async function createMeeting(m: {
@@ -224,9 +404,9 @@ export async function createMeeting(m: {
   durationMs?: number | null;
 }): Promise<number> {
   const res = await conn().execute(
-    `INSERT INTO meetings (title, created_at, duration_ms, source_path, media_path, status)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [m.title, now(), m.durationMs ?? null, m.sourcePath, m.mediaPath, m.status],
+    `INSERT INTO meetings (uid, title, created_at, updated_at, duration_ms, source_path, media_path, status)
+     VALUES ($1, $2, $3, $3, $4, $5, $6, $7)`,
+    [crypto.randomUUID(), m.title, now(), m.durationMs ?? null, m.sourcePath, m.mediaPath, m.status],
   );
   if (res.lastInsertId == null) throw new Error('createMeeting: no id returned');
   return Number(res.lastInsertId);
@@ -239,21 +419,43 @@ const MEETING_COLUMNS: Record<string, string> = {
   mediaPath: 'media_path',
   status: 'status',
   error: 'error',
+  folderId: 'folder_id',
+  dirPath: 'dir_path',
+  briefing: 'briefing',
+  splitTracks: 'split_tracks',
+  terms: 'terms',
 };
 
 export async function updateMeeting(
   id: number,
-  patch: Partial<Pick<Meeting, 'title' | 'durationMs' | 'sourcePath' | 'mediaPath' | 'status' | 'error'>>,
+  patch: Partial<
+    Pick<
+      Meeting,
+      | 'title'
+      | 'durationMs'
+      | 'sourcePath'
+      | 'mediaPath'
+      | 'status'
+      | 'error'
+      | 'folderId'
+      | 'dirPath'
+      | 'briefing'
+      | 'splitTracks'
+      | 'terms'
+    >
+  >,
 ): Promise<void> {
   const sets: string[] = [];
   const params: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
     const col = MEETING_COLUMNS[key];
     if (!col || value === undefined) continue;
-    params.push(value);
+    params.push(typeof value === 'boolean' ? Number(value) : Array.isArray(value) ? joinTerms(value) : value);
     sets.push(`${col} = $${params.length}`);
   }
   if (!sets.length) return;
+  params.push(now());
+  sets.push(`updated_at = $${params.length}`);
   params.push(id);
   await conn().execute(`UPDATE meetings SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
 }
@@ -269,15 +471,97 @@ export async function listMeetings(): Promise<Meeting[]> {
   return rows.map(toMeeting);
 }
 
-// Deletes the meeting with all transcripts/speakers/segments. Does not touch
-// files on disk.
+// Meetings still marked 'recording', newest first (normally at most one).
+export async function listRecordingMeetings(): Promise<Meeting[]> {
+  const rows = await conn().select<MeetingRow[]>(
+    "SELECT * FROM meetings WHERE status = 'recording' ORDER BY created_at DESC, id DESC",
+  );
+  return rows.map(toMeeting);
+}
+
+// Deletes the meeting with all transcripts/speakers/segments and its AI data.
+// Does not touch files on disk (see deleteMeetingFiles in pipeline.ts).
 export async function deleteMeeting(id: number): Promise<void> {
   const d = conn();
   const sub = 'SELECT id FROM transcripts WHERE meeting_id = $1';
   await d.execute(`DELETE FROM segments WHERE transcript_id IN (${sub})`, [id]);
   await d.execute(`DELETE FROM speakers WHERE transcript_id IN (${sub})`, [id]);
   await d.execute('DELETE FROM transcripts WHERE meeting_id = $1', [id]);
+  await d.execute("DELETE FROM ai_docs WHERE scope = 'meeting' AND owner_id = $1", [id]);
+  await d.execute("DELETE FROM chat_messages WHERE scope = 'meeting' AND owner_id = $1", [id]);
+  await d.execute('DELETE FROM action_items WHERE meeting_id = $1', [id]);
+  await d.execute('DELETE FROM extraction_rows WHERE meeting_id = $1', [id]);
   await d.execute('DELETE FROM meetings WHERE id = $1', [id]);
+}
+
+// ---------- Folders ----------
+
+// Folder names become directory names, so drop characters Windows forbids.
+function safeDirName(name: string): string {
+  const clean = name
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/, '');
+  return clean || 'Folder';
+}
+
+export async function createFolder(name: string, dirName?: string): Promise<Folder> {
+  const clean = name.trim() || 'Untitled folder';
+  const folder = { uid: crypto.randomUUID(), name: clean, dirName: dirName ?? safeDirName(clean), createdAt: now() };
+  const res = await conn().execute('INSERT INTO folders (uid, name, dir_name, created_at) VALUES ($1, $2, $3, $4)', [
+    folder.uid,
+    folder.name,
+    folder.dirName,
+    folder.createdAt,
+  ]);
+  if (res.lastInsertId == null) throw new Error('createFolder: no id returned');
+  return { id: Number(res.lastInsertId), ...folder, briefing: null, terms: [] };
+}
+
+// Alphabetical.
+export async function listFolders(): Promise<Folder[]> {
+  const rows = await conn().select<FolderRow[]>('SELECT * FROM folders ORDER BY name COLLATE NOCASE, id');
+  return rows.map(toFolder);
+}
+
+export async function getFolder(id: number): Promise<Folder | null> {
+  const rows = await conn().select<FolderRow[]>('SELECT * FROM folders WHERE id = $1', [id]);
+  return rows[0] ? toFolder(rows[0]) : null;
+}
+
+// Renames the folder in the app only; moving the directory is the caller's job
+// (pass the new `dirName` once it has been moved).
+export async function renameFolder(id: number, name: string, dirName?: string): Promise<void> {
+  const clean = name.trim();
+  if (!clean) return;
+  if (dirName !== undefined) {
+    await conn().execute('UPDATE folders SET name = $1, dir_name = $2 WHERE id = $3', [clean, dirName, id]);
+  } else {
+    await conn().execute('UPDATE folders SET name = $1 WHERE id = $2', [clean, id]);
+  }
+  await touchFolder(id);
+}
+
+// Deletes the folder and its folder-level AI data. Its meetings are kept and
+// become unassigned. Does not touch files on disk.
+export async function deleteFolder(id: number): Promise<void> {
+  const d = conn();
+  await d.execute('UPDATE meetings SET folder_id = NULL, updated_at = $1 WHERE folder_id = $2', [now(), id]);
+  await d.execute("DELETE FROM ai_docs WHERE scope = 'folder' AND owner_id = $1", [id]);
+  await d.execute("DELETE FROM chat_messages WHERE scope = 'folder' AND owner_id = $1", [id]);
+  await d.execute('DELETE FROM action_items WHERE folder_id = $1', [id]);
+  await d.execute(
+    'DELETE FROM extraction_rows WHERE template_id IN (SELECT id FROM extraction_templates WHERE folder_id = $1)',
+    [id],
+  );
+  await d.execute('DELETE FROM extraction_templates WHERE folder_id = $1', [id]);
+  await d.execute('DELETE FROM folders WHERE id = $1', [id]);
+}
+
+// `folderId` null = unassigned ("Unsorted").
+export async function setMeetingFolder(meetingId: number, folderId: number | null): Promise<void> {
+  await updateMeeting(meetingId, { folderId });
 }
 
 // ---------- Transcripts ----------
@@ -288,15 +572,21 @@ const SEGMENT_CHUNK = 200;
 // Segments reference speakers by `speakerLabel` (matching `speakers[].label`).
 export async function createTranscript(
   meetingId: number,
-  t: { provider: ProviderId; model: string; costUsd: number | null; languages: string | null },
+  t: {
+    provider: ProviderId;
+    model: string;
+    costUsd: number | null;
+    languages: string | null;
+    source?: TranscriptSource; // default 'async'
+  },
   speakers: { label: string; name: string | null; isSelf: boolean }[],
   segments: { speakerLabel: string | null; startMs: number; endMs: number; text: string }[],
 ): Promise<number> {
   const d = conn();
   const res = await d.execute(
-    `INSERT INTO transcripts (meeting_id, provider, model, created_at, cost_usd, languages)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [meetingId, t.provider, t.model, now(), t.costUsd, t.languages],
+    `INSERT INTO transcripts (meeting_id, provider, model, source, created_at, cost_usd, languages)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [meetingId, t.provider, t.model, t.source ?? 'async', now(), t.costUsd, t.languages],
   );
   if (res.lastInsertId == null) throw new Error('createTranscript: no id returned');
   const transcriptId = Number(res.lastInsertId);
@@ -348,7 +638,11 @@ export async function createTranscript(
       );
     }
 
-    await d.execute('UPDATE meetings SET active_transcript_id = $1 WHERE id = $2', [transcriptId, meetingId]);
+    await d.execute('UPDATE meetings SET active_transcript_id = $1, updated_at = $2 WHERE id = $3', [
+      transcriptId,
+      now(),
+      meetingId,
+    ]);
   } catch (err) {
     // No cross-statement transactions with the pool: undo by hand.
     try {
@@ -374,9 +668,9 @@ export async function listTranscripts(meetingId: number): Promise<Transcript[]> 
 
 export async function setActiveTranscript(meetingId: number, transcriptId: number): Promise<void> {
   await conn().execute(
-    `UPDATE meetings SET active_transcript_id = $1
+    `UPDATE meetings SET active_transcript_id = $1, updated_at = $3
      WHERE id = $2 AND EXISTS (SELECT 1 FROM transcripts WHERE id = $1 AND meeting_id = $2)`,
-    [transcriptId, meetingId],
+    [transcriptId, meetingId, now()],
   );
 }
 
@@ -397,6 +691,7 @@ export async function deleteTranscript(transcriptId: number): Promise<void> {
      ) WHERE id = $1 AND (active_transcript_id = $2 OR active_transcript_id IS NULL)`,
     [meetingId, transcriptId],
   );
+  await touch('meeting', meetingId);
 }
 
 export async function getTranscriptDetail(transcriptId: number): Promise<TranscriptDetail | null> {
@@ -431,10 +726,15 @@ export async function updateSegment(id: number, patch: { text?: string; speakerI
   if (!sets.length) return;
   params.push(id);
   await conn().execute(`UPDATE segments SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+  await touch('segment', id);
 }
 
 export async function deleteSegment(id: number): Promise<void> {
-  await conn().execute('DELETE FROM segments WHERE id = $1', [id]);
+  const d = conn();
+  // Look up the owner first: once deleted, the segment can't be resolved.
+  const rows = await d.select<{ transcript_id: number }[]>('SELECT transcript_id FROM segments WHERE id = $1', [id]);
+  await d.execute('DELETE FROM segments WHERE id = $1', [id]);
+  if (rows[0]) await touch('transcript', rows[0].transcript_id);
 }
 
 // Appends the next segment's text to this one, extends its end time, deletes
@@ -459,6 +759,7 @@ export async function mergeWithNext(segmentId: number): Promise<void> {
     cur.id,
   ]);
   await d.execute('DELETE FROM segments WHERE id = $1', [next.id]);
+  await touch('transcript', cur.transcript_id);
 }
 
 // ---------- Speakers ----------
@@ -466,6 +767,7 @@ export async function mergeWithNext(segmentId: number): Promise<void> {
 export async function renameSpeaker(speakerId: number, name: string | null): Promise<void> {
   const clean = name?.trim() || null;
   await conn().execute('UPDATE speakers SET name = $1 WHERE id = $2', [clean, speakerId]);
+  await touch('speaker', speakerId);
 }
 
 export async function addSpeaker(transcriptId: number, name: string): Promise<Speaker> {
@@ -484,6 +786,7 @@ export async function addSpeaker(transcriptId: number, name: string): Promise<Sp
     clean,
   ]);
   if (res.lastInsertId == null) throw new Error('addSpeaker: no id returned');
+  await touch('transcript', transcriptId);
   return { id: Number(res.lastInsertId), transcriptId, label, name: clean, isSelf: false };
 }
 
@@ -538,4 +841,908 @@ export async function search(query: string, limit = 200): Promise<SearchHit[]> {
   }));
 }
 
+// ---------- AI docs & chat ----------
+
+interface AiDocRow {
+  id: number;
+  scope: AiScope;
+  owner_id: number;
+  kind: AiDocKind;
+  content: string;
+  model: string | null;
+  created_at: string;
+  cost_usd: number | null;
+}
+
+interface ChatMessageRow {
+  id: number;
+  scope: AiScope;
+  owner_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
+const toAiDoc = (r: AiDocRow): AiDoc => ({
+  id: r.id,
+  scope: r.scope,
+  ownerId: r.owner_id,
+  kind: r.kind,
+  content: r.content,
+  model: r.model,
+  createdAt: r.created_at,
+  costUsd: r.cost_usd,
+});
+
+const toChatMessage = (r: ChatMessageRow): ChatMessage => ({
+  id: r.id,
+  scope: r.scope,
+  ownerId: r.owner_id,
+  role: r.role,
+  content: r.content,
+  createdAt: r.created_at,
+});
+
+// Only meeting-scoped data counts as meeting content for backup.
+async function touchOwner(scope: AiScope, ownerId: number): Promise<void> {
+  if (scope === 'meeting') await touch('meeting', ownerId);
+  else await touchFolder(ownerId);
+}
+
+// Keeps one doc per (scope, owner, kind): a regenerated summary replaces the old one.
+export async function saveAiDoc(doc: {
+  scope: AiScope;
+  ownerId: number;
+  kind: AiDocKind;
+  content: string;
+  model: string | null;
+  costUsd: number | null;
+}): Promise<AiDoc> {
+  const d = conn();
+  const createdAt = now();
+  const res = await d.execute(
+    `INSERT INTO ai_docs (scope, owner_id, kind, content, model, created_at, cost_usd)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [doc.scope, doc.ownerId, doc.kind, doc.content, doc.model, createdAt, doc.costUsd],
+  );
+  if (res.lastInsertId == null) throw new Error('saveAiDoc: no id returned');
+  const id = Number(res.lastInsertId);
+  await d.execute('DELETE FROM ai_docs WHERE scope = $1 AND owner_id = $2 AND kind = $3 AND id <> $4', [
+    doc.scope,
+    doc.ownerId,
+    doc.kind,
+    id,
+  ]);
+  await touchOwner(doc.scope, doc.ownerId);
+  return { id, ...doc, createdAt };
+}
+
+export async function getAiDoc(scope: AiScope, ownerId: number, kind: AiDocKind): Promise<AiDoc | null> {
+  const rows = await conn().select<AiDocRow[]>(
+    'SELECT * FROM ai_docs WHERE scope = $1 AND owner_id = $2 AND kind = $3 ORDER BY id DESC LIMIT 1',
+    [scope, ownerId, kind],
+  );
+  return rows[0] ? toAiDoc(rows[0]) : null;
+}
+
+export async function deleteAiDoc(scope: AiScope, ownerId: number, kind: AiDocKind): Promise<void> {
+  await conn().execute('DELETE FROM ai_docs WHERE scope = $1 AND owner_id = $2 AND kind = $3', [scope, ownerId, kind]);
+  await touchOwner(scope, ownerId);
+}
+
+// Oldest first.
+export async function listChatMessages(scope: AiScope, ownerId: number): Promise<ChatMessage[]> {
+  const rows = await conn().select<ChatMessageRow[]>(
+    'SELECT * FROM chat_messages WHERE scope = $1 AND owner_id = $2 ORDER BY id',
+    [scope, ownerId],
+  );
+  return rows.map(toChatMessage);
+}
+
+export async function addChatMessage(
+  scope: AiScope,
+  ownerId: number,
+  role: ChatMessage['role'],
+  content: string,
+): Promise<ChatMessage> {
+  const createdAt = now();
+  const res = await conn().execute(
+    'INSERT INTO chat_messages (scope, owner_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)',
+    [scope, ownerId, role, content, createdAt],
+  );
+  if (res.lastInsertId == null) throw new Error('addChatMessage: no id returned');
+  await touchOwner(scope, ownerId);
+  return { id: Number(res.lastInsertId), scope, ownerId, role, content, createdAt };
+}
+
+export async function clearChat(scope: AiScope, ownerId: number): Promise<void> {
+  await conn().execute('DELETE FROM chat_messages WHERE scope = $1 AND owner_id = $2', [scope, ownerId]);
+  await touchOwner(scope, ownerId);
+}
+
 export type { Segment };
+
+// =====================================================================
+// Phase 4: folders on disk, folder AI data, meeting bundles.
+// =====================================================================
+
+// ---------- Meeting/folder lookups ----------
+
+export async function getMeetingByUid(uid: string): Promise<Meeting | null> {
+  const rows = await conn().select<MeetingRow[]>('SELECT * FROM meetings WHERE uid = $1', [uid]);
+  return rows[0] ? toMeeting(rows[0]) : null;
+}
+
+export async function getFolderByUid(uid: string): Promise<Folder | null> {
+  const rows = await conn().select<FolderRow[]>('SELECT * FROM folders WHERE uid = $1', [uid]);
+  return rows[0] ? toFolder(rows[0]) : null;
+}
+
+// Oldest first, which is the order folder AI reads them in.
+export async function listFolderMeetings(folderId: number): Promise<Meeting[]> {
+  const rows = await conn().select<MeetingRow[]>(
+    'SELECT * FROM meetings WHERE folder_id = $1 ORDER BY created_at, id',
+    [folderId],
+  );
+  return rows.map(toMeeting);
+}
+
+// A folder with a known uid (bundle import), unlike createFolder.
+export async function insertFolder(f: Omit<Folder, 'id'>): Promise<Folder> {
+  const res = await conn().execute(
+    'INSERT INTO folders (uid, name, dir_name, created_at, briefing, terms) VALUES ($1, $2, $3, $4, $5, $6)',
+    [f.uid, f.name, f.dirName, f.createdAt, f.briefing, joinTerms(f.terms)],
+  );
+  if (res.lastInsertId == null) throw new Error('insertFolder: no id returned');
+  return { id: Number(res.lastInsertId), ...f };
+}
+
+export async function setFolderBriefing(id: number, briefing: string | null): Promise<void> {
+  await conn().execute('UPDATE folders SET briefing = $1 WHERE id = $2', [briefing, id]);
+  await touchFolder(id);
+}
+
+export async function setFolderTerms(id: number, terms: string[]): Promise<void> {
+  await conn().execute('UPDATE folders SET terms = $1 WHERE id = $2', [joinTerms(terms), id]);
+  await touchFolder(id);
+}
+
+// Where a meeting's files are. Not a content change, so updated_at stays
+// (moving a folder on disk shouldn't make backup re-upload every meeting).
+export async function setMeetingLocation(
+  id: number,
+  loc: { dirPath: string | null; mediaPath: string | null; sourcePath: string | null },
+): Promise<void> {
+  await conn().execute('UPDATE meetings SET dir_path = $1, media_path = $2, source_path = $3 WHERE id = $4', [
+    loc.dirPath,
+    loc.mediaPath,
+    loc.sourcePath,
+    id,
+  ]);
+}
+
+// For the sidecar writer: meetings with a directory changed after `since`.
+export async function listMeetingsChangedSince(since: string): Promise<{ id: number; updatedAt: string }[]> {
+  const rows = await conn().select<{ id: number; updated_at: string }[]>(
+    'SELECT id, updated_at FROM meetings WHERE dir_path IS NOT NULL AND updated_at > $1',
+    [since],
+  );
+  return rows.map((r) => ({ id: r.id, updatedAt: r.updated_at }));
+}
+
+// Search limited to one folder's meetings.
+export async function searchFolder(folderId: number, query: string, limit = 30): Promise<SearchHit[]> {
+  const built = buildSearchSql(query, limit, { folderId });
+  if (!built) return [];
+  const rows = await conn().select<SearchRow[]>(built.sql, built.params);
+  return rows.map((r) => ({
+    meetingId: r.meeting_id,
+    meetingTitle: r.meeting_title,
+    meetingCreatedAt: r.meeting_created_at,
+    transcriptId: r.transcript_id,
+    segmentId: r.segment_id,
+    startMs: r.start_ms,
+    endMs: r.end_ms,
+    speakerName: r.speaker_name,
+    text: r.text,
+  }));
+}
+
+export interface SegmentRef {
+  segmentId: number;
+  meetingId: number;
+  meetingTitle: string;
+  startMs: number;
+  speaker: string;
+  text: string;
+}
+
+// Resolves segment ids from any meeting (folder-level citations).
+export async function getSegmentRefs(ids: number[]): Promise<SegmentRef[]> {
+  const unique = [...new Set(ids)].filter((n) => Number.isInteger(n));
+  const out: SegmentRef[] = [];
+  for (const part of chunk(unique, 200)) {
+    const ph = part.map((_, i) => `$${i + 1}`).join(', ');
+    const rows = await conn().select<
+      { segment_id: number; meeting_id: number; meeting_title: string; start_ms: number; speaker: string | null; text: string }[]
+    >(
+      `SELECT s.id AS segment_id, t.meeting_id, m.title AS meeting_title, s.start_ms, s.text,
+              COALESCE(NULLIF(TRIM(sp.name), ''), sp.label) AS speaker
+       FROM segments s
+       JOIN transcripts t ON t.id = s.transcript_id
+       JOIN meetings m ON m.id = t.meeting_id
+       LEFT JOIN speakers sp ON sp.id = s.speaker_id
+       WHERE s.id IN (${ph})`,
+      part,
+    );
+    for (const r of rows) {
+      out.push({
+        segmentId: r.segment_id,
+        meetingId: r.meeting_id,
+        meetingTitle: r.meeting_title,
+        startMs: r.start_ms,
+        speaker: r.speaker ?? 'Unknown',
+        text: r.text,
+      });
+    }
+  }
+  return out;
+}
+
+// ---------- Action items ----------
+
+interface ActionItemRow {
+  id: number;
+  folder_id: number | null;
+  meeting_id: number | null;
+  text: string;
+  owner: string | null;
+  status: ActionItemStatus;
+  first_seen_meeting: number | null;
+  last_update_meeting: number | null;
+  source_ms: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const toActionItem = (r: ActionItemRow): ActionItem => ({
+  id: r.id,
+  folderId: r.folder_id,
+  meetingId: r.meeting_id,
+  text: r.text,
+  owner: r.owner,
+  status: r.status,
+  firstSeenMeeting: r.first_seen_meeting,
+  lastUpdateMeeting: r.last_update_meeting,
+  sourceMs: r.source_ms,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+// Items are part of their meeting's bundle, so changes count as meeting content.
+async function touchItemMeeting(meetingId: number | null): Promise<void> {
+  if (meetingId != null) await touch('meeting', meetingId);
+}
+
+// Open first, then by when they came up.
+export async function listActionItems(folderId: number): Promise<ActionItem[]> {
+  const rows = await conn().select<ActionItemRow[]>(
+    `SELECT * FROM action_items WHERE folder_id = $1
+     ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'done' THEN 1 ELSE 2 END, created_at, id`,
+    [folderId],
+  );
+  return rows.map(toActionItem);
+}
+
+export async function listMeetingActionItems(meetingId: number): Promise<ActionItem[]> {
+  const rows = await conn().select<ActionItemRow[]>('SELECT * FROM action_items WHERE meeting_id = $1 ORDER BY id', [
+    meetingId,
+  ]);
+  return rows.map(toActionItem);
+}
+
+export async function addActionItem(item: Omit<ActionItem, 'id' | 'createdAt' | 'updatedAt'> & Partial<Pick<ActionItem, 'createdAt' | 'updatedAt'>>): Promise<ActionItem> {
+  const createdAt = item.createdAt ?? now();
+  const updatedAt = item.updatedAt ?? createdAt;
+  const res = await conn().execute(
+    `INSERT INTO action_items (folder_id, meeting_id, text, owner, status, first_seen_meeting, last_update_meeting,
+       source_ms, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      item.folderId,
+      item.meetingId,
+      item.text,
+      item.owner,
+      item.status,
+      item.firstSeenMeeting,
+      item.lastUpdateMeeting,
+      item.sourceMs,
+      createdAt,
+      updatedAt,
+    ],
+  );
+  if (res.lastInsertId == null) throw new Error('addActionItem: no id returned');
+  await touchItemMeeting(item.meetingId);
+  if (item.meetingId == null) await touchFolder(item.folderId);
+  return { ...item, id: Number(res.lastInsertId), createdAt, updatedAt };
+}
+
+const ACTION_ITEM_COLUMNS: Record<string, string> = {
+  text: 'text',
+  owner: 'owner',
+  status: 'status',
+  lastUpdateMeeting: 'last_update_meeting',
+  sourceMs: 'source_ms',
+  meetingId: 'meeting_id',
+};
+
+export async function updateActionItem(
+  id: number,
+  patch: Partial<Pick<ActionItem, 'text' | 'owner' | 'status' | 'lastUpdateMeeting' | 'sourceMs' | 'meetingId'>>,
+): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    const col = ACTION_ITEM_COLUMNS[key];
+    if (!col || value === undefined) continue;
+    params.push(value);
+    sets.push(`${col} = $${params.length}`);
+  }
+  if (!sets.length) return;
+  params.push(now());
+  sets.push(`updated_at = $${params.length}`);
+  params.push(id);
+  await conn().execute(`UPDATE action_items SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+  const rows = await conn().select<{ meeting_id: number | null; folder_id: number | null }[]>(
+    'SELECT meeting_id, folder_id FROM action_items WHERE id = $1',
+    [id],
+  );
+  await touchItemMeeting(rows[0]?.meeting_id ?? null);
+  await touchFolder(rows[0]?.folder_id ?? null);
+}
+
+export async function deleteActionItem(id: number): Promise<void> {
+  const rows = await conn().select<{ meeting_id: number | null; folder_id: number | null }[]>(
+    'SELECT meeting_id, folder_id FROM action_items WHERE id = $1',
+    [id],
+  );
+  await conn().execute('DELETE FROM action_items WHERE id = $1', [id]);
+  await touchItemMeeting(rows[0]?.meeting_id ?? null);
+  await touchFolder(rows[0]?.folder_id ?? null);
+}
+
+// Moving a meeting to another folder takes the items it started along.
+export async function moveMeetingActionItems(meetingId: number, folderId: number | null): Promise<void> {
+  await conn().execute('UPDATE action_items SET folder_id = $1 WHERE meeting_id = $2', [folderId, meetingId]);
+}
+
+// ---------- Extraction ----------
+
+interface TemplateRow {
+  id: number;
+  folder_id: number;
+  name: string;
+  fields_json: string;
+  created_at: string;
+}
+
+interface ExtractionRowRow {
+  id: number;
+  template_id: number;
+  meeting_id: number;
+  values_json: string;
+  created_at: string;
+}
+
+function parseJson<T>(text: string, fallback: T): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+const toTemplate = (r: TemplateRow): ExtractionTemplate => ({
+  id: r.id,
+  folderId: r.folder_id,
+  name: r.name,
+  fields: parseJson<ExtractionField[]>(r.fields_json, []),
+  createdAt: r.created_at,
+});
+
+const toExtractionRow = (r: ExtractionRowRow): ExtractionRow => ({
+  id: r.id,
+  templateId: r.template_id,
+  meetingId: r.meeting_id,
+  values: parseJson<Record<string, string | null>>(r.values_json, {}),
+  createdAt: r.created_at,
+});
+
+export async function listExtractionTemplates(folderId: number): Promise<ExtractionTemplate[]> {
+  const rows = await conn().select<TemplateRow[]>('SELECT * FROM extraction_templates WHERE folder_id = $1 ORDER BY id', [
+    folderId,
+  ]);
+  return rows.map(toTemplate);
+}
+
+export async function getExtractionTemplate(id: number): Promise<ExtractionTemplate | null> {
+  const rows = await conn().select<TemplateRow[]>('SELECT * FROM extraction_templates WHERE id = $1', [id]);
+  return rows[0] ? toTemplate(rows[0]) : null;
+}
+
+export async function createExtractionTemplate(
+  folderId: number,
+  name: string,
+  fields: ExtractionField[],
+): Promise<ExtractionTemplate> {
+  const createdAt = now();
+  const res = await conn().execute(
+    'INSERT INTO extraction_templates (folder_id, name, fields_json, created_at) VALUES ($1, $2, $3, $4)',
+    [folderId, name, JSON.stringify(fields), createdAt],
+  );
+  if (res.lastInsertId == null) throw new Error('createExtractionTemplate: no id returned');
+  await touchFolder(folderId);
+  return { id: Number(res.lastInsertId), folderId, name, fields, createdAt };
+}
+
+export async function updateExtractionTemplate(id: number, name: string, fields: ExtractionField[]): Promise<void> {
+  await conn().execute('UPDATE extraction_templates SET name = $1, fields_json = $2 WHERE id = $3', [
+    name,
+    JSON.stringify(fields),
+    id,
+  ]);
+  await touchTemplateFolder(id);
+}
+
+export async function deleteExtractionTemplate(id: number): Promise<void> {
+  await touchTemplateFolder(id);
+  await conn().execute('DELETE FROM extraction_rows WHERE template_id = $1', [id]);
+  await conn().execute('DELETE FROM extraction_templates WHERE id = $1', [id]);
+}
+
+export async function listExtractionRows(templateId: number): Promise<ExtractionRow[]> {
+  const rows = await conn().select<ExtractionRowRow[]>('SELECT * FROM extraction_rows WHERE template_id = $1 ORDER BY id', [
+    templateId,
+  ]);
+  return rows.map(toExtractionRow);
+}
+
+// With the template, so a bundle can recreate it elsewhere.
+export async function listMeetingExtractionRows(
+  meetingId: number,
+): Promise<(ExtractionRow & { template: ExtractionTemplate | null })[]> {
+  const rows = await conn().select<ExtractionRowRow[]>('SELECT * FROM extraction_rows WHERE meeting_id = $1 ORDER BY id', [
+    meetingId,
+  ]);
+  const out = [];
+  for (const r of rows) out.push({ ...toExtractionRow(r), template: await getExtractionTemplate(r.template_id) });
+  return out;
+}
+
+// One row per (template, meeting): a re-run replaces the old values.
+export async function saveExtractionRow(
+  templateId: number,
+  meetingId: number,
+  values: Record<string, string | null>,
+  createdAt: string = now(),
+): Promise<void> {
+  await conn().execute('DELETE FROM extraction_rows WHERE template_id = $1 AND meeting_id = $2', [templateId, meetingId]);
+  await conn().execute(
+    'INSERT INTO extraction_rows (template_id, meeting_id, values_json, created_at) VALUES ($1, $2, $3, $4)',
+    [templateId, meetingId, JSON.stringify(values), createdAt],
+  );
+  await touch('meeting', meetingId);
+}
+
+// ---------- Bundle import ----------
+
+// Inserts a meeting exactly as described (uid and timestamps kept).
+export async function insertImportedMeeting(m: Omit<Meeting, 'id' | 'activeTranscriptId'>): Promise<number> {
+  const res = await conn().execute(
+    `INSERT INTO meetings (uid, title, created_at, updated_at, duration_ms, source_path, media_path, status, error,
+       folder_id, dir_path, briefing, split_tracks, terms)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+    [
+      m.uid,
+      m.title,
+      m.createdAt,
+      m.updatedAt,
+      m.durationMs,
+      m.sourcePath,
+      m.mediaPath,
+      m.status,
+      m.error,
+      m.folderId,
+      m.dirPath,
+      m.briefing,
+      m.splitTracks == null ? null : Number(m.splitTracks),
+      joinTerms(m.terms),
+    ],
+  );
+  if (res.lastInsertId == null) throw new Error('insertImportedMeeting: no id returned');
+  return Number(res.lastInsertId);
+}
+
+// Overwrites a meeting row with imported values, keeping its local id.
+export async function replaceImportedMeeting(id: number, m: Omit<Meeting, 'id' | 'activeTranscriptId' | 'uid'>): Promise<void> {
+  await conn().execute(
+    `UPDATE meetings SET title = $1, created_at = $2, updated_at = $3, duration_ms = $4, source_path = $5,
+       media_path = $6, status = $7, error = $8, folder_id = $9, dir_path = $10, briefing = $11,
+       split_tracks = $12, terms = $13
+     WHERE id = $14`,
+    [
+      m.title,
+      m.createdAt,
+      m.updatedAt,
+      m.durationMs,
+      m.sourcePath,
+      m.mediaPath,
+      m.status,
+      m.error,
+      m.folderId,
+      m.dirPath,
+      m.briefing,
+      m.splitTracks == null ? null : Number(m.splitTracks),
+      joinTerms(m.terms),
+      id,
+    ],
+  );
+}
+
+// Everything deleteMeeting removes except the meeting row itself.
+export async function deleteMeetingContent(id: number): Promise<void> {
+  const d = conn();
+  const sub = 'SELECT id FROM transcripts WHERE meeting_id = $1';
+  await d.execute(`DELETE FROM segments WHERE transcript_id IN (${sub})`, [id]);
+  await d.execute(`DELETE FROM speakers WHERE transcript_id IN (${sub})`, [id]);
+  await d.execute('DELETE FROM transcripts WHERE meeting_id = $1', [id]);
+  await d.execute('UPDATE meetings SET active_transcript_id = NULL WHERE id = $1', [id]);
+  await d.execute("DELETE FROM ai_docs WHERE scope = 'meeting' AND owner_id = $1", [id]);
+  await d.execute("DELETE FROM chat_messages WHERE scope = 'meeting' AND owner_id = $1", [id]);
+  await d.execute('DELETE FROM action_items WHERE meeting_id = $1', [id]);
+  await d.execute('DELETE FROM extraction_rows WHERE meeting_id = $1', [id]);
+}
+
+// Inserts a transcript with its own speaker/segment ids and returns old → new
+// id maps, so the caller can fix references (active transcript, citations).
+export async function insertImportedTranscript(
+  meetingId: number,
+  t: Omit<Transcript, 'id' | 'meetingId'>,
+  speakers: Omit<Speaker, 'transcriptId'>[],
+  segments: Omit<Segment, 'transcriptId'>[],
+): Promise<{ transcriptId: number; speakerIds: Map<number, number>; segmentIds: Map<number, number> }> {
+  const d = conn();
+  const res = await d.execute(
+    `INSERT INTO transcripts (meeting_id, provider, model, source, created_at, cost_usd, languages)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [meetingId, t.provider, t.model, t.source, t.createdAt, t.costUsd, t.languages],
+  );
+  if (res.lastInsertId == null) throw new Error('insertImportedTranscript: no id returned');
+  const transcriptId = Number(res.lastInsertId);
+  const speakerIds = new Map<number, number>();
+  const segmentIds = new Map<number, number>();
+  try {
+    // One row at a time for speakers (few), so each new id is known exactly.
+    for (const s of speakers) {
+      const r = await d.execute('INSERT INTO speakers (transcript_id, label, name, is_self) VALUES ($1, $2, $3, $4)', [
+        transcriptId,
+        s.label,
+        s.name,
+        s.isSelf ? 1 : 0,
+      ]);
+      if (r.lastInsertId == null) throw new Error('insertImportedTranscript: no speaker id returned');
+      speakerIds.set(s.id, Number(r.lastInsertId));
+    }
+    // Segments in batches; new ids are read back in insertion (= id) order
+    // and paired with the inputs, rather than assumed consecutive.
+    for (const part of chunk(segments, SEGMENT_CHUNK)) {
+      const params: unknown[] = [];
+      const values = part.map((s) => {
+        params.push(
+          transcriptId,
+          s.speakerId != null ? (speakerIds.get(s.speakerId) ?? null) : null,
+          Math.round(s.startMs),
+          Math.round(s.endMs),
+          s.text,
+          s.edited ? 1 : 0,
+        );
+        const n = params.length;
+        return `($${n - 5}, $${n - 4}, $${n - 3}, $${n - 2}, $${n - 1}, $${n})`;
+      });
+      await d.execute(
+        `INSERT INTO segments (transcript_id, speaker_id, start_ms, end_ms, text, edited) VALUES ${values.join(', ')}`,
+        params,
+      );
+    }
+    const ids = await d.select<{ id: number }[]>('SELECT id FROM segments WHERE transcript_id = $1 ORDER BY id', [
+      transcriptId,
+    ]);
+    if (ids.length !== segments.length) throw new Error('insertImportedTranscript: segment count mismatch');
+    segments.forEach((s, i) => segmentIds.set(s.id, ids[i].id));
+  } catch (err) {
+    try {
+      await d.execute('DELETE FROM segments WHERE transcript_id = $1', [transcriptId]);
+      await d.execute('DELETE FROM speakers WHERE transcript_id = $1', [transcriptId]);
+      await d.execute('DELETE FROM transcripts WHERE id = $1', [transcriptId]);
+    } catch {
+      /* keep the original error */
+    }
+    throw err;
+  }
+  return { transcriptId, speakerIds, segmentIds };
+}
+
+// Final step of an import: active transcript and the bundle's updated_at
+// (not "now", or the import itself would look like a newer edit).
+export async function finishImportedMeeting(id: number, activeTranscriptId: number | null, updatedAt: string): Promise<void> {
+  await conn().execute('UPDATE meetings SET active_transcript_id = $1, updated_at = $2 WHERE id = $3', [
+    activeTranscriptId,
+    updatedAt,
+    id,
+  ]);
+}
+
+export async function insertImportedAiDoc(doc: Omit<AiDoc, 'id'>): Promise<void> {
+  await conn().execute(
+    `INSERT INTO ai_docs (scope, owner_id, kind, content, model, created_at, cost_usd)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [doc.scope, doc.ownerId, doc.kind, doc.content, doc.model, doc.createdAt, doc.costUsd],
+  );
+}
+
+export async function insertImportedChatMessage(m: Omit<ChatMessage, 'id'>): Promise<void> {
+  await conn().execute(
+    'INSERT INTO chat_messages (scope, owner_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)',
+    [m.scope, m.ownerId, m.role, m.content, m.createdAt],
+  );
+}
+
+// All meeting-scoped AI docs (summary, notes, …) for the bundle.
+export async function listMeetingAiDocs(meetingId: number): Promise<AiDoc[]> {
+  const rows = await conn().select<AiDocRow[]>("SELECT * FROM ai_docs WHERE scope = 'meeting' AND owner_id = $1 ORDER BY id", [
+    meetingId,
+  ]);
+  return rows.map(toAiDoc);
+}
+
+// ---------- Live transcript ----------
+//
+// The live transcript is created with createTranscript on its first segments
+// and then grows in small batches while the meeting runs, so a crash loses
+// only the last few seconds.
+
+export async function hasLiveTranscript(meetingId: number): Promise<boolean> {
+  const rows = await conn().select<{ n: number }[]>(
+    "SELECT COUNT(*) AS n FROM transcripts WHERE meeting_id = $1 AND source = 'live'",
+    [meetingId],
+  );
+  return Number(rows[0]?.n ?? 0) > 0;
+}
+
+// Speaker ids by label, creating the speaker if the transcript lacks it.
+export async function ensureSpeakers(
+  transcriptId: number,
+  speakers: { label: string; isSelf: boolean }[],
+): Promise<Map<string, number>> {
+  const d = conn();
+  const load = async () => {
+    const rows = await d.select<{ id: number; label: string }[]>(
+      'SELECT id, label FROM speakers WHERE transcript_id = $1 ORDER BY id',
+      [transcriptId],
+    );
+    const map = new Map<string, number>();
+    for (const r of rows) if (!map.has(r.label)) map.set(r.label, r.id);
+    return map;
+  };
+  let ids = await load();
+  const missing = speakers.filter((s, i) => !ids.has(s.label) && speakers.findIndex((x) => x.label === s.label) === i);
+  if (missing.length) {
+    for (const s of missing) {
+      await d.execute('INSERT INTO speakers (transcript_id, label, name, is_self) VALUES ($1, $2, NULL, $3)', [
+        transcriptId,
+        s.label,
+        s.isSelf ? 1 : 0,
+      ]);
+    }
+    ids = await load();
+  }
+  return ids;
+}
+
+export async function appendSegments(
+  transcriptId: number,
+  segments: { speakerId: number | null; startMs: number; endMs: number; text: string }[],
+): Promise<void> {
+  if (!segments.length) return;
+  const d = conn();
+  for (const part of chunk(segments, SEGMENT_CHUNK)) {
+    const params: unknown[] = [];
+    const values = part.map((s) => {
+      params.push(transcriptId, s.speakerId, Math.round(s.startMs), Math.round(s.endMs), s.text);
+      const n = params.length;
+      return `($${n - 4}, $${n - 3}, $${n - 2}, $${n - 1}, $${n}, 0)`;
+    });
+    await d.execute(
+      `INSERT INTO segments (transcript_id, speaker_id, start_ms, end_ms, text, edited) VALUES ${values.join(', ')}`,
+      params,
+    );
+  }
+  await touch('transcript', transcriptId);
+}
+
+export async function updateTranscriptStats(
+  transcriptId: number,
+  stats: { costUsd: number | null; languages: string | null },
+): Promise<void> {
+  await conn().execute('UPDATE transcripts SET cost_usd = $1, languages = $2 WHERE id = $3', [
+    stats.costUsd,
+    stats.languages,
+    transcriptId,
+  ]);
+  await touch('transcript', transcriptId);
+}
+
+// =====================================================================
+// Phase 6: backup state and folder bundles (folder.json).
+// =====================================================================
+
+// Folder-level data (folder summary, chat, templates, unattached action items)
+// lives in folder.json; folders.updated_at tells backup and the sidecar writer
+// that it changed.
+async function touchFolder(folderId: number | null): Promise<void> {
+  if (folderId != null) await conn().execute('UPDATE folders SET updated_at = $1 WHERE id = $2', [now(), folderId]);
+}
+
+async function touchTemplateFolder(templateId: number): Promise<void> {
+  await conn().execute(
+    'UPDATE folders SET updated_at = $1 WHERE id = (SELECT folder_id FROM extraction_templates WHERE id = $2)',
+    [now(), templateId],
+  );
+}
+
+// '' for folders created by an import that hasn't brought their folder.json yet.
+export async function getFolderUpdatedAt(id: number): Promise<string> {
+  const rows = await conn().select<{ updated_at: string | null }[]>('SELECT updated_at FROM folders WHERE id = $1', [id]);
+  return rows[0]?.updated_at ?? '';
+}
+
+export async function setFolderUpdatedAt(id: number, updatedAt: string): Promise<void> {
+  await conn().execute('UPDATE folders SET updated_at = $1 WHERE id = $2', [updatedAt, id]);
+}
+
+export async function listFoldersChangedSince(since: string): Promise<{ id: number; updatedAt: string }[]> {
+  const rows = await conn().select<{ id: number; updated_at: string }[]>(
+    'SELECT id, COALESCE(updated_at, created_at) AS updated_at FROM folders WHERE COALESCE(updated_at, created_at) > $1',
+    [since],
+  );
+  return rows.map((r) => ({ id: r.id, updatedAt: r.updated_at }));
+}
+
+export async function listFolderAiDocs(folderId: number): Promise<AiDoc[]> {
+  const rows = await conn().select<AiDocRow[]>("SELECT * FROM ai_docs WHERE scope = 'folder' AND owner_id = $1 ORDER BY id", [
+    folderId,
+  ]);
+  return rows.map(toAiDoc);
+}
+
+// Action items that no meeting bundle carries.
+export async function listUnattachedActionItems(folderId: number): Promise<ActionItem[]> {
+  const rows = await conn().select<ActionItemRow[]>(
+    'SELECT * FROM action_items WHERE folder_id = $1 AND meeting_id IS NULL ORDER BY id',
+    [folderId],
+  );
+  return rows.map(toActionItem);
+}
+
+// Clears what folder.json describes before an import writes it again.
+// Templates are kept (their rows belong to meetings); see upsertFolderTemplates.
+export async function deleteFolderContent(folderId: number): Promise<void> {
+  const d = conn();
+  await d.execute("DELETE FROM ai_docs WHERE scope = 'folder' AND owner_id = $1", [folderId]);
+  await d.execute("DELETE FROM chat_messages WHERE scope = 'folder' AND owner_id = $1", [folderId]);
+  await d.execute('DELETE FROM action_items WHERE folder_id = $1 AND meeting_id IS NULL', [folderId]);
+}
+
+// Templates matched by name: existing ones get the bundle's fields, missing
+// ones are created, and ones not in the bundle are dropped when no meeting has
+// rows for them.
+export async function upsertFolderTemplates(
+  folderId: number,
+  templates: { name: string; fields: ExtractionField[]; createdAt: string }[],
+): Promise<void> {
+  const d = conn();
+  const existing = await listExtractionTemplates(folderId);
+  for (const t of templates) {
+    const match = existing.find((e) => e.name === t.name);
+    if (match) {
+      await d.execute('UPDATE extraction_templates SET fields_json = $1 WHERE id = $2', [JSON.stringify(t.fields), match.id]);
+    } else {
+      await d.execute('INSERT INTO extraction_templates (folder_id, name, fields_json, created_at) VALUES ($1, $2, $3, $4)', [
+        folderId,
+        t.name,
+        JSON.stringify(t.fields),
+        t.createdAt,
+      ]);
+    }
+  }
+  const names = new Set(templates.map((t) => t.name));
+  for (const e of existing) {
+    if (names.has(e.name)) continue;
+    const rows = await d.select<{ n: number }[]>('SELECT COUNT(*) AS n FROM extraction_rows WHERE template_id = $1', [e.id]);
+    if (!Number(rows[0]?.n)) await d.execute('DELETE FROM extraction_templates WHERE id = $1', [e.id]);
+  }
+}
+
+// A segment of the meeting with `meetingUid` at `startMs`, preferring the same
+// text and the active transcript. Remaps folder-level citations on import.
+export async function findSegmentId(meetingUid: string, startMs: number, text: string): Promise<number | null> {
+  const rows = await conn().select<{ id: number }[]>(
+    `SELECT s.id FROM segments s
+     JOIN transcripts t ON t.id = s.transcript_id
+     JOIN meetings m ON m.id = t.meeting_id
+     WHERE m.uid = $1 AND s.start_ms = $2
+     ORDER BY (s.text = $3) DESC, (t.id = m.active_transcript_id) DESC, s.id
+     LIMIT 1`,
+    [meetingUid, Math.round(startMs), text],
+  );
+  return rows[0]?.id ?? null;
+}
+
+// ---------- Backup state ----------
+
+export interface BackupFile {
+  name: string; // file name inside the meeting's remote directory
+  role: 'media' | 'source';
+  size: number;
+  mtime: string | null;
+  etag: string | null;
+  // An unfinished multipart upload of this file (resumed on the next run).
+  uploadId?: string | null;
+}
+
+export interface BackupState {
+  uid: string;
+  kind: 'meeting' | 'folder';
+  uploadedAt: string | null;
+  updatedAt: string | null; // the meeting/folder updated_at that was uploaded
+  files: BackupFile[];
+}
+
+interface BackupStateRow {
+  uid: string;
+  kind: 'meeting' | 'folder';
+  uploaded_at: string | null;
+  updated_at: string | null;
+  files_json: string;
+}
+
+const toBackupState = (r: BackupStateRow): BackupState => ({
+  uid: r.uid,
+  kind: r.kind,
+  uploadedAt: r.uploaded_at,
+  updatedAt: r.updated_at,
+  files: parseJson<BackupFile[]>(r.files_json, []),
+});
+
+export async function listBackupState(): Promise<BackupState[]> {
+  const rows = await conn().select<BackupStateRow[]>('SELECT * FROM backup_state');
+  return rows.map(toBackupState);
+}
+
+export async function getBackupState(uid: string): Promise<BackupState | null> {
+  const rows = await conn().select<BackupStateRow[]>('SELECT * FROM backup_state WHERE uid = $1', [uid]);
+  return rows[0] ? toBackupState(rows[0]) : null;
+}
+
+export async function saveBackupState(s: BackupState): Promise<void> {
+  await conn().execute(
+    `INSERT INTO backup_state (uid, kind, uploaded_at, updated_at, files_json) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT(uid) DO UPDATE SET kind = $2, uploaded_at = $3, updated_at = $4, files_json = $5`,
+    [s.uid, s.kind, s.uploadedAt, s.updatedAt, JSON.stringify(s.files)],
+  );
+}
+
+// Forgets everything uploaded (e.g. after switching to another bucket).
+export async function clearBackupState(): Promise<void> {
+  await conn().execute('DELETE FROM backup_state');
+}

@@ -1,5 +1,6 @@
 import { ArrowUpToLine, Plus, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { parseTerms } from '../../lib/terms';
 import { useSettings } from '../../lib/settings';
 import { Card, IconButton, Select, Switch, Textarea, clsx } from '../ui';
 import { saveSettings } from './common';
@@ -27,18 +28,6 @@ const LANGUAGES: [string, string][] = [
 const NAMES = Object.fromEntries(LANGUAGES);
 const langName = (code: string) => NAMES[code] ?? code;
 
-function parseTerms(text: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const t = line.trim();
-    if (t && !seen.has(t.toLowerCase())) {
-      seen.add(t.toLowerCase());
-      out.push(t);
-    }
-  }
-  return out;
-}
 
 export function LanguageSection() {
   const languages = useSettings((s) => s.settings.languages);
@@ -143,7 +132,7 @@ export function LanguageSection() {
 
         <div className="flex flex-col gap-1.5 border-t border-line pt-5">
           <label htmlFor="terms" className="text-[13px] font-medium">
-            Custom vocabulary
+            Default vocabulary
           </label>
           <Textarea
             id="terms"
@@ -155,7 +144,7 @@ export function LanguageSection() {
             onBlur={commitTerms}
           />
           <span className="text-xs text-muted">
-            One term per line. Helps with names and words a transcriber wouldn't know.
+            One term per line, just the word or name, no explanation. Used for every meeting; folders and single meetings can add their own.
             {terms.length > 0 && ` ${terms.length} term${terms.length === 1 ? '' : 's'} saved.`} ElevenLabs charges
             extra for key terms (about $0.05 per hour).
           </span>

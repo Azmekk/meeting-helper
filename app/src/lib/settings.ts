@@ -2,6 +2,7 @@
 // data folder). Secrets are NOT here; see secrets.ts.
 import { load, type Store } from '@tauri-apps/plugin-store';
 import { create } from 'zustand';
+import type { AiProviderId } from './ai/types';
 import type { ProviderId } from './types';
 
 export interface Settings {
@@ -30,6 +31,45 @@ export interface Settings {
   checkForUpdates: boolean;
   // A release the user said to skip; not announced again.
   skippedVersion: string;
+  // AI assistant. Model settings: '' = the provider's recommended model.
+  aiProvider: AiProviderId;
+  aiCustomBaseUrl: string; // OpenAI-compatible base URL, e.g. https://openrouter.ai/api/v1
+  aiLiveModel: string; // rolling live notes
+  aiAnswerModel: string; // "help me answer"
+  aiSummaryModel: string; // summaries, chat, folder work
+  // 'meeting' = same language as the meeting, otherwise a language code.
+  aiOutputLanguage: string;
+  // Live transcription (Soniox real-time) and live AI while recording.
+  liveEnabled: boolean;
+  // Global shortcut for "help me answer", in Tauri accelerator syntax.
+  liveHotkey: string;
+  // The user dismissed the caching/cost warning shown on a mid-meeting model switch.
+  liveModelSwitchWarningOff: boolean;
+  // Ask Windows to keep the overlay window out of screen shares and captures.
+  overlayContentProtected: boolean;
+  // What each rolling-notes update sends: 'notes' = current notes + the last
+  // ~90 s (flat cost), 'full' = the whole transcript so far as cached context
+  // (better recall of earlier parts; cost grows with meeting length).
+  liveNotesContext: 'notes' | 'full';
+  // Folders. '' = no base folder: meetings aren't kept in their own directories.
+  baseFolder: string;
+  // After a meeting in a folder gets its summary, update the folder summary,
+  // action items and extraction tables in the background.
+  folderAiAuto: boolean;
+  // Cloud backup (S3/R2-compatible). Keys are in the keyring (secrets.ts).
+  backupEndpoint: string;
+  backupRegion: string; // 'auto' for R2
+  backupBucket: string;
+  backupPrefix: string; // folder inside the bucket, e.g. 'meeting-helper'
+  backupPathStyle: boolean;
+  // Back up shortly after a meeting is ready (never while recording).
+  backupAuto: boolean;
+  backupLastAt: string; // ISO time of the last finished backup, '' = never
+  backupLastSummary: string;
+  // Secret mode: the phone remote server (remote.rs) and the hide-window shortcut.
+  remoteEnabled: boolean;
+  remotePort: number;
+  secretHotkey: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -46,6 +86,30 @@ export const DEFAULT_SETTINGS: Settings = {
   obsScene: '',
   checkForUpdates: true,
   skippedVersion: '',
+  aiProvider: 'anthropic',
+  aiCustomBaseUrl: '',
+  aiLiveModel: '',
+  aiAnswerModel: '',
+  aiSummaryModel: '',
+  aiOutputLanguage: 'meeting',
+  liveEnabled: false,
+  liveHotkey: 'CommandOrControl+Alt+H',
+  liveModelSwitchWarningOff: false,
+  overlayContentProtected: true,
+  liveNotesContext: 'notes',
+  baseFolder: '',
+  folderAiAuto: true,
+  backupEndpoint: '',
+  backupRegion: 'auto',
+  backupBucket: '',
+  backupPrefix: 'meeting-helper',
+  backupPathStyle: false,
+  backupAuto: false,
+  backupLastAt: '',
+  backupLastSummary: '',
+  remoteEnabled: false,
+  remotePort: 4810,
+  secretHotkey: 'CommandOrControl+Alt+M',
 };
 
 interface SettingsState {

@@ -4,14 +4,22 @@ import { remove } from '@tauri-apps/plugin-fs';
 import { Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import * as db from '../../lib/db';
-import { ingestMedia } from '../../lib/pipeline';
+import { deleteMeetingFiles, emitMeetingChanged, ingestMedia } from '../../lib/pipeline';
+import { baseFolder, importRecordingIntoFolder, removeMeetingSidecars } from '../../lib/folders';
+import { useRecorder } from '../../lib/obs';
+import type { CopyProgress } from '../../lib/native';
 import type { Meeting } from '../../lib/types';
 import { Button, Modal, errorMessage, toast } from '../ui';
 import { MEDIA_EXTENSIONS, fileBaseName } from './shared';
 
-// Opens the file picker and imports the chosen recording. Resolves with the
-// new meeting id, or null if the user cancelled.
-export async function pickAndImportRecording(): Promise<number | null> {
+// Opens the file picker and imports the chosen recording into `folderId`
+// (null = Unsorted). With a base folder set the file is copied into the new
+// meeting's directory first; without one it's used where it is. Resolves with
+// the new meeting id, or null if the user cancelled.
+export async function pickAndImportRecording(
+  folderId: number | null = null,
+  onProgress?: (p: CopyProgress) => void,
+): Promise<number | null> {
   const picked = await open({
     multiple: false,
     directory: false,
@@ -22,7 +30,14 @@ export async function pickAndImportRecording(): Promise<number | null> {
     ],
   });
   if (!picked || typeof picked !== 'string') return null;
-  return ingestMedia(picked, fileBaseName(picked));
+  const title = fileBaseName(picked);
+  if (baseFolder()) return importRecordingIntoFolder(picked, title, folderId, onProgress);
+  const id = await ingestMedia(picked, title);
+  if (folderId != null) {
+    await db.setMeetingFolder(id, folderId);
+    emitMeetingChanged(id);
+  }
+  return id;
 }
 
 export function DeleteMeetingModal({
@@ -41,10 +56,20 @@ export function DeleteMeetingModal({
     if (meeting) setAlsoFiles(false);
   }, [meeting]);
 
-  const files = meeting ? [...new Set([meeting.mediaPath, meeting.sourcePath].filter((p): p is string => !!p))] : [];
+  // OBS is still writing the file of a meeting that's recording; leave it alone.
+  const files =
+    meeting && meeting.status !== 'recording'
+      ? [...new Set([meeting.mediaPath, meeting.sourcePath].filter((p): p is string => !!p))]
+      : [];
 
   const confirm = async () => {
     if (!meeting) return;
+    // The recording would come back as a new meeting and live lines would be
+    // saved under the deleted id.
+    if (useRecorder.getState().recordingMeetingId === meeting.id) {
+      toast('Stop the recording before deleting this meeting.', 'error');
+      return;
+    }
     setBusy(true);
     try {
       await db.deleteMeeting(meeting.id);
@@ -57,6 +82,10 @@ export function DeleteMeetingModal({
           }
         }
       }
+      // The app's own copies (imported media, work files) always go, and so do
+      // the sidecar files, or a rescan would bring the meeting back.
+      await deleteMeetingFiles(meeting.id).catch((err) => console.warn('Could not remove meeting files', err));
+      await removeMeetingSidecars(meeting).catch((err) => console.warn('Could not remove meeting.json', err));
       toast('Meeting deleted', 'success');
       onDeleted(meeting.id);
     } catch (err) {

@@ -12,6 +12,7 @@ import {
   type TextareaHTMLAttributes,
 } from 'react';
 import { create } from 'zustand';
+import { isHidden } from '../lib/hidden';
 
 export { clsx };
 
@@ -404,6 +405,8 @@ let toastId = 0;
 
 // Fire-and-forget notification, usable from anywhere (including non-React code).
 export function toast(message: string, tone: ToastTone = 'info'): void {
+  // Secret mode: nothing may pop up while the window is hidden, not even later.
+  if (isHidden()) return;
   const id = ++toastId;
   useToasts.setState((s) => ({ items: [...s.items, { id, tone, message }] }));
   setTimeout(

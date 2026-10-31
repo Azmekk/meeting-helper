@@ -5,12 +5,17 @@ import {
   defaultMeetingTitle,
   pauseRecording,
   resumeRecording,
+  setOthersInRoom,
+  setRecordingTerms,
   setRecordingTitle,
   startRecording,
   stopRecording,
   useRecorder,
 } from '../../lib/obs';
-import { Button, Callout, Card, Input, Spinner, clsx, errorMessage, toast } from '../ui';
+import { useSettings } from '../../lib/settings';
+import { Button, Callout, Card, Input, Spinner, Switch, clsx, errorMessage, toast } from '../ui';
+import FolderPicker from './FolderPicker';
+import { TermsField } from '../TermsField';
 
 function pad(n: number) {
   return String(n).padStart(2, '0');
@@ -44,6 +49,7 @@ export default function RecordPanel() {
   const title = useRecorder((s) => s.title);
   const lastIngest = useRecorder((s) => s.lastIngest);
   const restartNeeded = useRecorder((s) => s.restartNeeded);
+  const splitTracks = useSettings((s) => s.settings.splitTracks);
   const elapsed = useElapsed(startedAt, paused ? pausedAt : null);
 
   const [placeholder] = useState(() => defaultMeetingTitle());
@@ -107,13 +113,21 @@ export default function RecordPanel() {
             )}
           </div>
 
-          <Input
-            value={title}
-            onChange={(e) => setRecordingTitle(e.target.value)}
-            placeholder={placeholder}
-            aria-label="Meeting title"
-            className="h-11 text-[15px]"
-          />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Input
+              value={title}
+              onChange={(e) => setRecordingTitle(e.target.value)}
+              placeholder={placeholder}
+              aria-label="Meeting title"
+              className="h-11 min-w-0 flex-1 text-[15px]"
+            />
+            <div className="sm:w-60">
+              <FolderPicker />
+            </div>
+          </div>
+
+          {splitTracks && <OthersInRoom recording={recording} />}
+          <RecordingTerms recording={recording} />
 
           <div className="flex flex-wrap items-center gap-2">
             {recording ? (
@@ -139,7 +153,7 @@ export default function RecordPanel() {
               {!connected
                 ? 'Connect to OBS below to record.'
                 : recording
-                  ? 'You can rename the meeting until you stop.'
+                  ? 'You can rename the meeting or change its folder until you stop.'
                   : busy === 'starting'
                     ? 'Starting…'
                     : 'Press the red button to start. Leave the title empty to name it by date and time.'}
@@ -184,5 +198,56 @@ export default function RecordPanel() {
         </div>
       )}
     </Card>
+  );
+}
+
+// Only shown while the mic is transcribed on its own (Settings → Recording).
+function OthersInRoom({ recording }: { recording: boolean }) {
+  const othersInRoom = useRecorder((s) => s.othersInRoom);
+  return (
+    <div className="flex items-start gap-3">
+      <Switch
+        label="Someone is here with me"
+        checked={othersInRoom}
+        onChange={(v) => void setOthersInRoom(v).catch((err) => toast(errorMessage(err), 'error'))}
+      />
+      <div className="text-[13px]">
+        <div className="font-medium">Someone is here with me</div>
+        <div className="text-muted">
+          Transcribes everyone together instead of labelling your mic as you, so a person next to you isn’t
+          mistaken for you.{recording && ' Live transcription keeps the setting it started with.'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Collapsed unless used: most meetings get by on the default and folder lists.
+function RecordingTerms({ recording }: { recording: boolean }) {
+  const terms = useRecorder((s) => s.terms);
+  const [open, setOpen] = useState(terms.length > 0);
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="self-start text-[13px] text-accent hover:underline">
+        Add vocabulary for this meeting
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor="recording-terms" className="text-[13px] font-medium">
+        Vocabulary for this meeting
+      </label>
+      <TermsField
+        id="recording-terms"
+        rows={2}
+        terms={terms}
+        onSave={(next) => setRecordingTerms(next).catch((err) => toast(errorMessage(err), 'error'))}
+      />
+      <span className="text-xs text-muted">
+        Added to your default list and the folder’s.
+        {recording && ' Live transcription keeps the words it started with; the full transcription uses these.'}
+      </span>
+    </div>
   );
 }

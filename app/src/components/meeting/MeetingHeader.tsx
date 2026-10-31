@@ -1,9 +1,11 @@
 import {
   ArrowLeft,
+  Check,
   ChevronDown,
   Download,
   Ellipsis,
   FileText,
+  Folder as FolderIcon,
   FolderOpen,
   Languages,
   Pencil,
@@ -14,8 +16,10 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EXPORT_FORMATS, type ExportFormat } from '../../lib/export';
 import { formatDate, formatDuration } from '../../lib/format';
-import type { Job } from '../../lib/pipeline';
-import type { Meeting, ProviderId, Transcript } from '../../lib/types';
+import * as db from '../../lib/db';
+import { emitMeetingChanged, type Job } from '../../lib/pipeline';
+import { useSettings } from '../../lib/settings';
+import type { Folder, Meeting, ProviderId, Transcript } from '../../lib/types';
 import { Button, IconButton, Input, Select } from '../ui';
 import {
   MenuItem,
@@ -42,6 +46,8 @@ export function MeetingHeader({
   onShowInFolder,
   onDeleteTranscript,
   onDeleteMeeting,
+  folders,
+  onMoveToFolder,
 }: {
   meeting: Meeting;
   job: Job | undefined;
@@ -55,6 +61,8 @@ export function MeetingHeader({
   onShowInFolder: () => void;
   onDeleteTranscript: () => void;
   onDeleteMeeting: () => void;
+  folders: Folder[];
+  onMoveToFolder: (folderId: number | null) => void;
 }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [menu, setMenu] = useState<null | 'transcribe' | 'export' | 'more'>(null);
@@ -62,6 +70,12 @@ export function MeetingHeader({
   const hasMedia = !!(meeting.mediaPath || meeting.sourcePath);
   const toggle = (m: NonNullable<typeof menu>) => setMenu((cur) => (cur === m ? null : m));
   const close = () => setMenu(null);
+  const splitDefault = useSettings((s) => s.settings.splitTracks);
+  const split = meeting.splitTracks ?? splitDefault;
+  const toggleSplit = async () => {
+    await db.updateMeeting(meeting.id, { splitTracks: !split });
+    emitMeetingChanged(meeting.id);
+  };
 
   const saveTitle = (value: string) => {
     setEditingTitle(false);
@@ -108,6 +122,25 @@ export function MeetingHeader({
             <span className="text-faint">·</span>
             <span>{formatDuration(meeting.durationMs)}</span>
             <StatusBadge status={meeting.status} job={job} />
+            {(folders.length > 0 || meeting.folderId != null) && (
+              <label className="inline-flex items-center gap-1" title="Folder">
+                <FolderIcon size={13} className="text-faint" />
+                <select
+                  aria-label="Folder"
+                  value={meeting.folderId ?? ''}
+                  disabled={meeting.status === 'recording'}
+                  onChange={(e) => onMoveToFolder(e.target.value ? Number(e.target.value) : null)}
+                  className="max-w-48 cursor-pointer truncate rounded bg-transparent py-0.5 text-[13px] text-muted hover:bg-hover hover:text-text focus:outline-none disabled:cursor-default"
+                >
+                  <option value="">Unsorted</option>
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {activeTranscript?.languages && (
               <span className="inline-flex items-center gap-1 text-faint" title="Detected languages">
                 <Languages size={13} />
@@ -158,6 +191,11 @@ export function MeetingHeader({
                   {PROVIDER_LABEL[p]}
                 </MenuItem>
               ))}
+              <MenuSeparator />
+              {/* Off when someone else was at the desk: their voice is on the mic too. */}
+              <MenuItem icon={split ? Check : undefined} onClick={() => void toggleSplit()}>
+                Transcribe my mic separately
+              </MenuItem>
             </Popover>
           </div>
 

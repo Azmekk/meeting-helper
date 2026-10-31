@@ -1,10 +1,14 @@
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { ChevronDown, ChevronUp, Crosshair, FileText, ListFilter, RotateCcw, Search, Sparkles, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Crosshair, FileText, ListFilter, MessageSquare, RotateCcw, Search, Sparkles, Trash2, X, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DeleteMeetingModal } from '../components/meeting/actions';
+import { BriefingCard, ChatPanel, CitedLine, SummaryPanel } from '../components/meeting/AiPanels';
+import { TermsCard } from '../components/meeting/TermsCard';
+import type { CiteProps, CiteTarget } from '../components/meeting/AiMarkdown';
+import { CloudMediaBanner } from '../components/meeting/CloudMediaBanner';
 import { MediaPlayer } from '../components/meeting/MediaPlayer';
 import { MeetingHeader } from '../components/meeting/MeetingHeader';
 import { PROVIDER_IDS, PROVIDER_LABEL, isJobActive, speakerColor } from '../components/meeting/shared';
@@ -28,8 +32,9 @@ import * as db from '../lib/db';
 import { EXPORT_FORMATS, formatTranscript, safeFileName, type ExportFormat } from '../lib/export';
 import { highlightTerms, matchesQuery, parseQuery } from '../lib/search';
 import { onMeetingChanged, transcribeMeeting, useJobs, type Job, type JobStage } from '../lib/pipeline';
+import { moveMeetingToFolder, refreshFolders, useFolders } from '../lib/folders';
 import { useSettings } from '../lib/settings';
-import type { Meeting, ProviderId, Segment, Transcript, TranscriptDetail } from '../lib/types';
+import { speakerName, type Meeting, type ProviderId, type Segment, type Transcript, type TranscriptDetail } from '../lib/types';
 
 // Last segment that started at or before `ms`, if we're still inside it (with
 // a little slack for gaps between segments).
@@ -48,6 +53,14 @@ function findActiveSegment(segments: Segment[], ms: number): number | null {
   const s = segments[found];
   return ms <= s.endMs + 1500 ? s.id : null;
 }
+
+type RightTab = 'transcript' | 'summary' | 'chat';
+
+const RIGHT_TABS: { id: RightTab; label: string; icon: LucideIcon }[] = [
+  { id: 'transcript', label: 'Transcript', icon: FileText },
+  { id: 'summary', label: 'Summary', icon: Sparkles },
+  { id: 'chat', label: 'Chat', icon: MessageSquare },
+];
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -79,6 +92,8 @@ export default function MeetingScreen() {
   const [confirmDeleteTranscript, setConfirmDeleteTranscript] = useState(false);
   const [deletingTranscript, setDeletingTranscript] = useState(false);
   const [deleteMeetingOpen, setDeleteMeetingOpen] = useState(false);
+  const [tab, setTab] = useState<RightTab>('transcript');
+  const [citedId, setCitedId] = useState<number | null>(null);
 
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   const pendingSeek = useRef<{ ms: number; play: boolean } | null>(null);
@@ -132,6 +147,8 @@ export default function MeetingScreen() {
     setMeeting(undefined);
     setDetail(null);
     setActiveId(null);
+    setTab('transcript');
+    setCitedId(null);
     loadAll();
     refreshKnownNames();
     return onMeetingChanged((id) => {
@@ -202,6 +219,53 @@ export default function MeetingScreen() {
       document.querySelector(`[data-seg="${activeId}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
+  // Briefly highlights a segment and scrolls it into view.
+  const flashSegment = useCallback((segId: number) => {
+    setFlashId(segId);
+    requestAnimationFrame(() =>
+      document.querySelector(`[data-seg="${segId}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
+    );
+    setTimeout(() => setFlashId((cur) => (cur === segId ? null : cur)), 4000);
+  }, []);
+
+  // ---------- AI citations ----------
+
+  const segById = useMemo(() => new Map(detail?.segments.map((s) => [s.id, s]) ?? []), [detail?.segments]);
+  const speakerById = useMemo(() => new Map(detail?.speakers.map((s) => [s.id, s]) ?? []), [detail?.speakers]);
+
+  const resolveCite = useCallback(
+    (segId: number): CiteTarget | null => {
+      const seg = segById.get(segId);
+      if (!seg) return null;
+      const sp = seg.speakerId != null ? speakerById.get(seg.speakerId) : undefined;
+      return { startMs: seg.startMs, speaker: sp ? speakerName(sp) : 'Unknown', text: seg.text };
+    },
+    [segById, speakerById],
+  );
+
+  // A citation plays from that line and previews it; the transcript tab stays
+  // one click away so reading the summary isn't interrupted.
+  const cite = useMemo<CiteProps>(
+    () => ({
+      resolve: resolveCite,
+      onCite: (segId) => {
+        const seg = segById.get(segId);
+        if (!seg) return;
+        setCitedId(segId);
+        setFollow(false);
+        seek(seg.startMs, true);
+      },
+    }),
+    [resolveCite, segById, seek],
+  );
+  const citedTarget = citedId != null ? resolveCite(citedId) : null;
+
+  const showCitedInTranscript = () => {
+    if (citedId == null) return;
+    setTab('transcript');
+    flashSegment(citedId);
+  };
+
   // Space toggles play/pause when not typing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -227,19 +291,14 @@ export default function MeetingScreen() {
     const key = `${meetingId}:${tParam}:${segParam}`;
     if (handledLink.current === key) return;
     handledLink.current = key;
+    setTab('transcript');
 
     const segId = segParam ? Number(segParam) : null;
     const seg = segId != null ? detail.segments.find((s) => s.id === segId) : undefined;
     const t = tParam != null ? Number(tParam) : seg?.startMs;
     if (t != null && Number.isFinite(t)) seek(t, false);
-    if (seg) {
-      setFlashId(seg.id);
-      requestAnimationFrame(() =>
-        document.querySelector(`[data-seg="${seg.id}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
-      );
-      setTimeout(() => setFlashId((cur) => (cur === seg.id ? null : cur)), 4000);
-    }
-  }, [detail, tParam, segParam, meetingId, seek]);
+    if (seg) flashSegment(seg.id);
+  }, [detail, tParam, segParam, meetingId, seek, flashSegment]);
 
   // ---------- Find in this meeting ----------
 
@@ -403,6 +462,23 @@ export default function MeetingScreen() {
 
   // ---------- Meeting-level actions ----------
 
+  const folders = useFolders((s) => s.folders);
+  useEffect(() => {
+    refreshFolders().catch(() => {});
+  }, []);
+
+  const moveToFolder = async (folderId: number | null) => {
+    try {
+      await moveMeetingToFolder(meetingId, folderId);
+      await loadAll();
+      const name = folderId == null ? 'Unsorted' : folders.find((f) => f.id === folderId)?.name;
+      toast(`Moved to ${name ?? 'folder'}`, 'success');
+    } catch (err) {
+      toast(`Couldn't move the meeting: ${errorMessage(err)}`, 'error');
+      loadAll();
+    }
+  };
+
   const renameMeeting = async (title: string) => {
     setMeeting((m) => (m ? { ...m, title } : m));
     try {
@@ -514,6 +590,8 @@ export default function MeetingScreen() {
         onTranscribe={transcribe}
         onExport={exportAs}
         onShowInFolder={showInFolder}
+        folders={folders}
+        onMoveToFolder={moveToFolder}
         onDeleteTranscript={() => setConfirmDeleteTranscript(true)}
         onDeleteMeeting={() => setDeleteMeetingOpen(true)}
       />
@@ -544,6 +622,7 @@ export default function MeetingScreen() {
                   : 'The media file for this meeting is missing. The transcript is still available.'}
             </Callout>
           )}
+          {!meeting.mediaPath && <CloudMediaBanner meeting={meeting} />}
 
           {detail && (
             <SpeakersPanel
@@ -555,6 +634,9 @@ export default function MeetingScreen() {
               onAdd={addSpeaker}
             />
           )}
+
+          <BriefingCard meeting={meeting} onSaved={(briefing) => setMeeting((m) => (m ? { ...m, briefing } : m))} />
+          <TermsCard meeting={meeting} onSaved={(terms) => setMeeting((m) => (m ? { ...m, terms } : m))} />
         </aside>
 
         {/* Right: status + transcript */}
@@ -562,7 +644,12 @@ export default function MeetingScreen() {
           {busy && <ProcessingPanel job={job} />}
 
           {meeting.status === 'error' && !busy && (
-            <Callout tone="error" title="Transcription failed" className="mb-5">
+            <Callout
+              tone="error"
+              // Without playable media the failure was in recording/conversion, not transcription.
+              title={meeting.mediaPath ? 'Transcription failed' : 'Couldn’t process this meeting'}
+              className="mb-5"
+            >
               <p className="break-words">{meeting.error ?? 'Unknown error.'}</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button size="sm" variant="secondary" icon={RotateCcw} onClick={() => transcribe()}>
@@ -606,7 +693,43 @@ export default function MeetingScreen() {
           )}
 
           {detail && (
-            <>
+            <div role="tablist" aria-label="Meeting views" className="mb-3 flex items-end gap-1 border-b border-line">
+              {RIGHT_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t.id}
+                  onClick={() => setTab(t.id)}
+                  className={clsx(
+                    '-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] font-medium transition-colors',
+                    tab === t.id ? 'border-accent text-text' : 'border-transparent text-muted hover:text-text',
+                  )}
+                >
+                  <t.icon size={14} />
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* AI panels stay mounted while hidden so a running request survives tab switches. */}
+          {detail && (
+            <div className={clsx(tab === 'transcript' && 'hidden')}>
+              {citedTarget && (
+                <CitedLine target={citedTarget} onShow={showCitedInTranscript} onClose={() => setCitedId(null)} />
+              )}
+              <div className={clsx(tab !== 'summary' && 'hidden')}>
+                <SummaryPanel meetingId={meetingId} hasText={segmentCount > 0} cite={cite} />
+              </div>
+              <div className={clsx(tab !== 'chat' && 'hidden')}>
+                <ChatPanel meetingId={meetingId} hasText={segmentCount > 0} cite={cite} />
+              </div>
+            </div>
+          )}
+
+          {detail && (
+            <div className={clsx(tab !== 'transcript' && 'hidden')}>
               <div className="sticky top-0 z-20 -mx-3 mb-1 flex items-center gap-3 bg-bg/90 px-3 py-2.5 backdrop-blur">
                 <div className="text-[13px] text-muted">
                   {segmentCount} segment{segmentCount === 1 ? '' : 's'}
@@ -702,7 +825,7 @@ export default function MeetingScreen() {
                   onUserScroll={() => setFollow((f) => (f ? false : f))}
                 />
               )}
-            </>
+            </div>
           )}
         </section>
       </div>
