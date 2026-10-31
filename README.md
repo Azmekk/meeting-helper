@@ -48,6 +48,12 @@ Across all meetings, or within one. Copes with Bulgarian word endings: `срещ
 <br><sub>Searching every meeting at once, in the light theme</sub>
 </div>
 
+<div align="center">
+<img src="docs/screenshots/summary-light.webp" alt="A meeting's AI summary in the light theme: overview, decisions, action items and risks, each point followed by timestamp pills that jump to the transcript line" width="445">
+<img src="docs/screenshots/folders-dark.webp" alt="A project folder on the Progress tab in the dark theme: action items from several meetings with their owners, open items first and done or dropped ones crossed out" width="445">
+<br><sub>An AI summary linked to the transcript, and action items tracked across a folder's meetings</sub>
+</div>
+
 Everything stays on your computer except the audio sent to the transcription provider you pick.
 
 ## Download
@@ -82,6 +88,12 @@ The app tells you if ffmpeg or OBS is missing, and when a new version is out.
 1. In OBS: **Tools → WebSocket Server Settings → Enable WebSocket server**, then **Show Connect Info** and copy the password.
 2. In the app: **Record**, paste the password, **Connect**. The app sets up OBS's audio tracks and recording output for you.
 3. Wear headphones (otherwise your mic also picks up the other people), press record, then stop. The recording is converted to MP4 and transcribed automatically.
+
+<div align="center">
+<img src="docs/screenshots/record-live-dark.webp" alt="The Record screen during a meeting: the running timer and stop button, the live Bulgarian/English transcript, a suggested answer and rolling AI notes" width="620">
+<img src="docs/screenshots/phone.webp" alt="The phone remote: rolling notes from the meeting, with the suggested answer sheet pulled up to half height" width="277">
+<br><sub>Live transcription while recording, and the same notes and answers on your phone</sub>
+</div>
 
 ### Importing a recording
 
