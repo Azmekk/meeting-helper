@@ -65,7 +65,7 @@ export function FfmpegDialog() {
           <div className="text-[13px] font-medium">Install it from a terminal{IS_WINDOWS && ' (PowerShell)'}:</div>
           {FFMPEG_INSTALL.map((cmd) => (
             <div key={cmd} className="flex items-center gap-2">
-              <code className="flex-1 rounded-lg bg-sunken px-3 py-2 font-mono text-[12.5px]">{cmd}</code>
+              <code className="flex-1 rounded-xl bg-fill px-3.5 py-2 font-mono text-[12.5px]">{cmd}</code>
               <IconButton icon={Copy} label="Copy command" onClick={() => copy(cmd)} />
             </div>
           ))}

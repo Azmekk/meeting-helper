@@ -34,7 +34,7 @@ export function DataSection() {
       description="Your meetings database and settings live here. Recordings stay where OBS saved them or where you imported them from."
     >
       <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1 truncate rounded-lg bg-sunken px-3 py-2 font-mono text-[12.5px]" title={dir ?? ''}>
+        <div className="min-w-0 flex-1 truncate rounded-full bg-fill px-3.5 py-2 font-mono text-[12.5px]" title={dir ?? ''}>
           {dir ?? <Spinner size={13} />}
         </div>
         <Button icon={FolderOpen} onClick={openFolder} disabled={!dir}>

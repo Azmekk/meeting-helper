@@ -74,8 +74,13 @@ export function languageName(code: string): string {
 
 // `setting` is Settings.aiOutputLanguage: 'meeting' or a language code.
 export function languageInstruction(setting: string): string {
+  // Headings come from English templates and earlier documents may be in
+  // another language; without this the model mixes them or explains itself.
+  const rest =
+    'Translate the section headings too, and rewrite any earlier version you are given in that language. ' +
+    'Never comment on the language you are writing in.';
   if (!setting || setting === 'meeting') {
-    return 'Write in the language the meeting is held in; if it mixes languages, use the one spoken most.';
+    return `Write in the language the meeting is held in; if it mixes languages, use the one spoken most. ${rest}`;
   }
-  return `Write in ${languageName(setting)}, whatever language the meeting is held in.`;
+  return `Write in ${languageName(setting)}, whatever language the meeting is held in. ${rest}`;
 }

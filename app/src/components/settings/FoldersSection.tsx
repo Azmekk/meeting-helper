@@ -76,7 +76,7 @@ export function FoldersSection() {
         description="Each folder becomes a directory here, with one sub-folder per meeting holding its recording, meeting.json, transcript.md and summary.md."
       >
         <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1 truncate rounded-lg bg-sunken px-3 py-2 font-mono text-[12.5px]" title={baseFolder}>
+          <div className="min-w-0 flex-1 truncate rounded-full bg-fill px-3.5 py-2 font-mono text-[12.5px]" title={baseFolder}>
             {baseFolder || <span className="font-sans text-muted">Not set: meetings stay where they were recorded or imported from.</span>}
           </div>
           {baseFolder && <Button icon={FolderOpen} onClick={reveal}>Show</Button>}

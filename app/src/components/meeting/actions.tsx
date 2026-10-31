@@ -40,6 +40,26 @@ export async function pickAndImportRecording(
   return id;
 }
 
+// Removes the meeting and its transcripts; with `alsoFiles`, its media files too
+// (never while OBS is still writing them). Used by the meeting page, the list
+// and the "Recording saved" dialog.
+export async function deleteMeeting(meeting: Meeting, alsoFiles: boolean): Promise<void> {
+  await db.deleteMeeting(meeting.id);
+  if (alsoFiles && meeting.status !== 'recording') {
+    for (const f of new Set([meeting.mediaPath, meeting.sourcePath].filter((p): p is string => !!p))) {
+      try {
+        await remove(f);
+      } catch (err) {
+        toast(`Couldn't delete ${fileBaseName(f)}: ${errorMessage(err)}`, 'error');
+      }
+    }
+  }
+  // The app's own copies (imported media, work files) always go, and so do
+  // the sidecar files, or a rescan would bring the meeting back.
+  await deleteMeetingFiles(meeting.id).catch((err) => console.warn('Could not remove meeting files', err));
+  await removeMeetingSidecars(meeting).catch((err) => console.warn('Could not remove meeting.json', err));
+}
+
 export function DeleteMeetingModal({
   meeting,
   onClose,
@@ -72,20 +92,7 @@ export function DeleteMeetingModal({
     }
     setBusy(true);
     try {
-      await db.deleteMeeting(meeting.id);
-      if (alsoFiles) {
-        for (const f of files) {
-          try {
-            await remove(f);
-          } catch (err) {
-            toast(`Couldn't delete ${fileBaseName(f)}: ${errorMessage(err)}`, 'error');
-          }
-        }
-      }
-      // The app's own copies (imported media, work files) always go, and so do
-      // the sidecar files, or a rescan would bring the meeting back.
-      await deleteMeetingFiles(meeting.id).catch((err) => console.warn('Could not remove meeting files', err));
-      await removeMeetingSidecars(meeting).catch((err) => console.warn('Could not remove meeting.json', err));
+      await deleteMeeting(meeting, alsoFiles);
       toast('Meeting deleted', 'success');
       onDeleted(meeting.id);
     } catch (err) {
@@ -116,7 +123,7 @@ export function DeleteMeetingModal({
         can't be undone.
       </p>
       {files.length > 0 && (
-        <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-lg border border-line bg-sunken/50 px-3 py-2.5">
+        <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-2xl bg-fill px-4 py-3">
           <input
             type="checkbox"
             checked={alsoFiles}

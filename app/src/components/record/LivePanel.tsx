@@ -22,7 +22,7 @@ import { saveSettings } from '../settings/common';
 import { LiveModelPicker } from '../live/LiveModelPicker';
 import { LineView, PartialView, PlainMarkdown, STATE_LABEL, TRACK_LABEL, hotkeyLabel } from '../live/shared';
 import { PhoneLink } from '../remote/PhoneLink';
-import { Badge, Button, Callout, Card, Input, Modal, Spinner, Switch, clsx } from '../ui';
+import { Badge, Button, Callout, Card, Input, Modal, Segmented, Spinner, Switch } from '../ui';
 
 export default function LivePanel() {
   const enabled = useSettings((s) => s.settings.liveEnabled);
@@ -137,7 +137,7 @@ function TranscriptStream() {
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
-      className="h-[26rem] space-y-1.5 overflow-y-auto rounded-lg border border-line bg-sunken/40 px-3 py-2.5"
+      className="h-[26rem] space-y-1.5 overflow-y-auto rounded-2xl bg-fill/60 px-3.5 py-3"
     >
       {lines.length === 0 && open.length === 0 && (
         <div className="flex h-full items-center justify-center text-[13px] text-faint">
@@ -170,8 +170,9 @@ function AnswerBox() {
   };
 
   return (
-    <div className="space-y-2.5 rounded-lg border border-line p-3">
-      <div className="flex items-center gap-2">
+    <div className="space-y-2.5 rounded-2xl border border-line p-3.5">
+      {/* Wraps the language picker onto its own line when the column is narrow. */}
+      <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" size="sm" icon={Lightbulb} onClick={() => void helpMeAnswer()} loading={answer?.busy}>
           Help me answer
         </Button>
@@ -190,7 +191,7 @@ function AnswerBox() {
         <Button size="sm" icon={Send} onClick={ask} disabled={!question.trim()} aria-label="Ask" />
       </div>
       {answer && (
-        <div className="rounded-md bg-sunken/50 px-3 py-2">
+        <div className="rounded-xl bg-fill/60 px-3 py-2">
           {answer.question && <div className="mb-1 text-xs text-muted">“{answer.question}”</div>}
           {answer.error ? (
             <p className="text-[13px] text-danger">{answer.error}</p>
@@ -215,7 +216,7 @@ function NotesBox() {
   const mode = useSettings((s) => s.settings.liveNotesContext);
 
   return (
-    <div className="space-y-2.5 rounded-lg border border-line p-3">
+    <div className="space-y-2.5 rounded-2xl border border-line p-3.5">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 text-[13px] font-medium">
           <Sparkles size={14} className="text-accent" /> Notes
@@ -242,21 +243,16 @@ export function NotesContextToggle({ mode }: { mode: 'notes' | 'full' }) {
     <div className="space-y-1">
       <div className="flex items-center gap-2">
         <span className="shrink-0 text-xs text-muted">Notes read</span>
-        <div className="flex rounded-md border border-line p-0.5 text-[12px]">
-          {(['notes', 'full'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => void saveSettings({ liveNotesContext: m })}
-              className={clsx(
-                'rounded px-2 py-0.5 transition-colors',
-                mode === m ? 'bg-accent-soft font-medium text-accent' : 'text-muted hover:text-text',
-              )}
-            >
-              {m === 'notes' ? 'Last 90 s' : 'Whole meeting'}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          size="sm"
+          label="Notes read"
+          value={mode}
+          onChange={(m) => void saveSettings({ liveNotesContext: m })}
+          options={[
+            { value: 'notes', label: 'Last 90 s' },
+            { value: 'full', label: 'Whole meeting' },
+          ]}
+        />
       </div>
       <p className="text-[11px] leading-snug text-faint">
         {mode === 'notes'

@@ -1,0 +1,62 @@
+/* Phone page only (imported after index.css by main.tsx). */
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  /* No pull-to-refresh or rubber-banding of the whole page. */
+  overscroll-behavior: none;
+  background: var(--c-bg);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Speaker colors for other people; "You" uses the accent. */
+:root {
+  --spk-0: #6d4fd1;
+  --spk-1: #0b7a6f;
+  --spk-2: #b4521a;
+  --spk-3: #2f6bd1;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --spk-0: #c9b6ff;
+    --spk-1: #7fe0d4;
+    --spk-2: #ffb48c;
+    --spk-3: #9cc4ff;
+  }
+}
+
+/* The small top and bottom bars are the only blurred surfaces. */
+.rm-bar {
+  background: color-mix(in srgb, var(--c-panel) 80%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+}
+
+.rm-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.rm-sheet {
+  will-change: transform;
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.18);
+}
+@media (prefers-color-scheme: dark) {
+  .rm-sheet {
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.6);
+  }
+}
+
+@keyframes rm-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.rm-pulse {
+  animation: rm-pulse 1.6s ease-in-out infinite;
+}

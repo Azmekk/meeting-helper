@@ -51,7 +51,7 @@ export interface ObsOutputConfig {
 }
 
 export interface SetupCheck {
-  id: 'mic' | 'desktop' | 'others' | 'output' | 'live';
+  id: 'mic' | 'desktop' | 'others' | 'output' | 'live' | 'doubleMic';
   label: string;
   ok: boolean;
   detail?: string;
@@ -72,6 +72,22 @@ export interface IngestInfo {
   status: 'processing' | 'done' | 'error';
   meetingId?: number;
   error?: string;
+}
+
+// A recording OBS started on its own (its UI, a hotkey, or already running when
+// we connected). It isn't a meeting until the user says so.
+export interface ExternalRecording {
+  path: string | null; // null when OBS was already recording when we connected
+  startedAt: number;
+  stopped: boolean; // stopped before the user answered
+  ignored: boolean; // "Ignore": still recording, not tracked
+}
+
+// A finished recording waiting for "transcribe / summarise?" (ProcessingDialog).
+export interface ProcessingOffer {
+  meetingId: number;
+  durationMs: number;
+  live: boolean; // it has a live transcript
 }
 
 export interface RecorderState {
@@ -106,6 +122,9 @@ export interface RecorderState {
   // Encoder/quality/mode changed while OBS was running; OBS needs a restart.
   restartNeeded: boolean;
   lastIngest: IngestInfo | null;
+  externalRecording: ExternalRecording | null;
+  // Shown one at a time, oldest first.
+  processing: ProcessingOffer[];
 }
 
 // Lives outside any screen so a recording keeps going (and stays visible in
@@ -134,6 +153,8 @@ export const useRecorder = create<RecorderState>(() => ({
   lastConfigure: null,
   restartNeeded: false,
   lastIngest: null,
+  externalRecording: null,
+  processing: [],
 }));
 
 const set = useRecorder.setState;
@@ -204,6 +225,10 @@ let retryDelay = 3000;
 let autoConfiguredThisSession = false;
 let recordingWallStart: number | null = null;
 const handledPaths = new Set<string>();
+// Stopped external recordings the user hasn't answered about yet: never imported automatically.
+const heldPaths = new Set<string>();
+// Set right before our own StartRecord, so the STARTED event knows the recording is ours.
+let appStarting = false;
 
 class ObsConnectError extends Error {
   constructor(
@@ -373,7 +398,12 @@ export function initRecorder(): void {
   obs.on('CurrentProgramSceneChanged', (e) => set({ currentScene: e.sceneName }));
   obs.on('SceneListChanged', () => void refreshScenes().catch(() => {}));
   obs.on('InputAudioTracksChanged', () => scheduleSetupRefresh());
-  obs.on('InputMuteStateChanged', () => scheduleSetupRefresh());
+  obs.on('InputMuteStateChanged', (e) => {
+    // Show the mic's mute at once (the app's button, OBS's mixer or a hotkey).
+    const setup = get().setup;
+    if (setup && e.inputName === setup.micInput) set({ setup: { ...setup, micMuted: e.inputMuted } });
+    scheduleSetupRefresh();
+  });
   obs.on('InputCreated', () => scheduleSetupRefresh());
   obs.on('InputRemoved', () => scheduleSetupRefresh());
   obs.on('InputNameChanged', () => scheduleSetupRefresh());
@@ -415,6 +445,9 @@ async function onConnected() {
     // Recording ended while we were disconnected; we can't know its file.
     set({ recording: false, startedAt: null, paused: false, pausedAt: null });
   }
+  // An unanswered external recording that ended unseen: we don't know its file.
+  const ext = get().externalRecording;
+  if (!status.outputActive && ext && !ext.stopped) set({ externalRecording: null });
   // Undo a record path left pointing at a meeting directory (app closed mid-recording).
   if (!status.outputActive) await restoreRecordPath();
 
@@ -422,8 +455,17 @@ async function onConnected() {
   await reconcileRecordingRows(!!status.outputActive).catch((err) => console.warn('Recording cleanup failed', err));
   await refreshSetup();
 
-  const s = get();
-  if (!autoConfiguredThisSession && !s.recording && s.setup && !s.setup.ok) {
+  if (autoConfiguredThisSession || get().recording) return;
+  // No scene chosen yet: set up our own (that runs configureObs too).
+  if (!getSettings().obsScene) {
+    autoConfiguredThisSession = true;
+    if (await ensureDefaultScene()) {
+      toast(`Set up a “${MEETING_SCENE}” scene in OBS. See the Record screen for details.`, 'info');
+      return;
+    }
+  }
+  const setup = get().setup;
+  if (setup && !setup.ok) {
     autoConfiguredThisSession = true;
     try {
       const changes = await configureObs({ auto: true });
@@ -442,7 +484,9 @@ function onRecordState(state: string, outputPath: string | null) {
     case 'OBS_WEBSOCKET_OUTPUT_STARTING':
       set({ busy: 'starting' });
       break;
-    case 'OBS_WEBSOCKET_OUTPUT_STARTED':
+    case 'OBS_WEBSOCKET_OUTPUT_STARTED': {
+      const ours = appStarting || !!preparedRow;
+      appStarting = false;
       recordingWallStart = now;
       set({
         recording: true,
@@ -453,8 +497,11 @@ function onRecordState(state: string, outputPath: string | null) {
         lastIngest: null,
         recordingPath: outputPath ?? null,
       });
-      createRecordingRow(outputPath);
+      // Started from OBS itself: ask before turning it into a meeting.
+      if (ours) createRecordingRow(outputPath);
+      else set({ externalRecording: { path: outputPath ?? null, startedAt: now, stopped: false, ignored: false } });
       break;
+    }
     case 'OBS_WEBSOCKET_OUTPUT_PAUSED':
       set({ paused: true, pausedAt: now });
       break;
@@ -473,7 +520,7 @@ function onRecordState(state: string, outputPath: string | null) {
     case 'OBS_WEBSOCKET_OUTPUT_STOPPED':
       set({ recording: false, startedAt: null, paused: false, pausedAt: null, busy: null, recordingPath: null });
       void restoreRecordPath();
-      if (outputPath) void handleFinishedRecording(outputPath);
+      onRecordingEnded(outputPath);
       break;
   }
 }
@@ -585,9 +632,9 @@ async function reconcileRecordingRows(obsRecording: boolean) {
     if (rows[0]) {
       keep = rows[0].id;
       set({ recordingMeetingId: keep, recordingPath: get().recordingPath ?? rows[0].sourcePath });
-    } else {
-      // Recording started while the app was closed: give it a row now.
-      createRecordingRow(null);
+    } else if (!get().externalRecording) {
+      // Recording started while the app was closed: ask whether it's a meeting.
+      set({ externalRecording: { path: null, startedAt: get().startedAt ?? Date.now(), stopped: false, ignored: false } });
     }
   }
   if (!obsRecording && get().recordingMeetingId != null) set({ recordingMeetingId: null, recordingPath: null });
@@ -619,8 +666,9 @@ async function recoverRecording(m: Meeting) {
   try {
     const file = await placeRecording(m.id, path);
     const title = (await db.getMeeting(m.id))?.title ?? m.title;
-    await ingestMedia(file, title, { fromRecording: true, meetingId: m.id });
+    await ingestMedia(file, title, { fromRecording: true, deferTranscription: true, meetingId: m.id });
     toast(`Recovered “${title}”, which was still recording when Meeting Helper closed.`, 'success');
+    await offerFinished(m.id);
   } catch (err) {
     // ingestMedia marks the row failed when it can't read the file.
     console.warn('Could not recover the recording', err);
@@ -653,7 +701,8 @@ export function setRecordingStopHook(fn: StopHook | null): void {
 // button or from OBS's own UI.
 async function handleFinishedRecording(path: string) {
   const key = normPath(path);
-  if (handledPaths.has(key)) return;
+  // Ignored, or an external recording still waiting for an answer.
+  if (handledPaths.has(key) || heldPaths.has(key)) return;
   handledPaths.add(key);
 
   // A title typed on the Record screen wins; otherwise keep the row's title
@@ -686,9 +735,10 @@ async function handleFinishedRecording(path: string) {
       set({ lastIngest: { title, path: file, status: 'processing' } });
     }
 
-    const meetingId = await ingestMedia(file, title, { fromRecording: true, meetingId: row?.id });
+    const meetingId = await ingestMedia(file, title, { fromRecording: true, deferTranscription: true, meetingId: row?.id });
     set({ lastIngest: { title, path: file, status: 'done', meetingId } });
     toast(`“${title}” saved to Meetings.`, 'success');
+    await offerFinished(meetingId);
   } catch (err) {
     const error = errorMessage(err);
     const where = get().lastIngest?.path ?? path;
@@ -697,6 +747,113 @@ async function handleFinishedRecording(path: string) {
   } finally {
     if (rowId != null) finishingIds.delete(rowId);
   }
+}
+
+// Both the STOPPED event and stopRecording() land here (imports are deduped by path).
+function onRecordingEnded(path: string | null) {
+  const ext = get().externalRecording;
+  if (ext && !ext.stopped) {
+    if (ext.ignored) {
+      if (path) handledPaths.add(normPath(path));
+      set({ externalRecording: null });
+      return;
+    }
+    // Not answered yet: ask about the file instead of importing it.
+    const file = path ?? ext.path;
+    if (file) heldPaths.add(normPath(file));
+    set({ externalRecording: { ...ext, path: file, stopped: true } });
+    return;
+  }
+  if (path) void handleFinishedRecording(path);
+}
+
+// ---------- External recordings (started in OBS itself) ----------
+
+// "Track as meeting" (or "Track it" after ignoring it) while it records: from
+// here on it's handled like a recording started from the app.
+export function trackExternalRecording(): void {
+  const ext = get().externalRecording;
+  if (!ext || ext.stopped) return;
+  const path = ext.path ?? get().recordingPath;
+  if (path) handledPaths.delete(normPath(path));
+  set({ externalRecording: null });
+  if (get().recording) createRecordingRow(path);
+}
+
+// "Ignore": OBS keeps recording; stopping it won't import anything.
+export function ignoreExternalRecording(): void {
+  const ext = get().externalRecording;
+  if (!ext || ext.stopped) return;
+  if (ext.path) handledPaths.add(normPath(ext.path));
+  set({ externalRecording: { ...ext, ignored: true } });
+}
+
+// "Import" after it stopped unanswered: the normal finished-recording import.
+export async function importExternalRecording(): Promise<void> {
+  const ext = get().externalRecording;
+  if (!ext?.stopped || !ext.path) return;
+  const path = ext.path;
+  const key = normPath(path);
+  set({ externalRecording: null });
+  heldPaths.delete(key);
+  if (handledPaths.has(key)) return;
+  handledPaths.add(key);
+
+  const title = defaultMeetingTitle(new Date(ext.startedAt));
+  set({ lastIngest: { title, path, status: 'processing' } });
+  try {
+    const meetingId = await ingestMedia(path, title, { fromRecording: true, deferTranscription: true });
+    // Same as a row made when OBS started: no directory, but keep the chosen folder.
+    const folderId = get().folderId;
+    if (folderId != null && baseFolder() && (await db.getFolder(folderId))) {
+      await db.setMeetingFolder(meetingId, folderId);
+      emitMeetingChanged(meetingId);
+    }
+    set({ lastIngest: { title, path, status: 'done', meetingId } });
+    toast(`“${title}” saved to Meetings.`, 'success');
+    await offerFinished(meetingId);
+  } catch (err) {
+    const error = errorMessage(err);
+    set({ lastIngest: { title, path, status: 'error', error } });
+    toast(`Couldn't import the recording: ${error}. The file is at ${path}`, 'error');
+  }
+}
+
+// "Discard": forgets it; the file stays in OBS's recording folder.
+export function discardExternalRecording(): void {
+  const ext = get().externalRecording;
+  if (!ext) return;
+  if (ext.path) {
+    heldPaths.delete(normPath(ext.path));
+    handledPaths.add(normPath(ext.path));
+  }
+  set({ externalRecording: null });
+}
+
+// ---------- After a recording: transcribe / summarise? ----------
+//
+// Recordings are never processed automatically; ProcessingDialog asks. live.ts
+// offers it as soon as a live meeting stops (while the import still runs); each
+// meeting is offered once, so the import doesn't open a second dialog.
+
+const offeredIds = new Set<number>();
+
+export function offerProcessing(offer: ProcessingOffer): void {
+  if (offeredIds.has(offer.meetingId)) return;
+  offeredIds.add(offer.meetingId);
+  set((s) => ({ processing: [...s.processing, offer] }));
+}
+
+export function dismissProcessing(meetingId: number): void {
+  set((s) => ({ processing: s.processing.filter((p) => p.meetingId !== meetingId) }));
+}
+
+async function offerFinished(meetingId: number) {
+  const m = await db.getMeeting(meetingId).catch(() => null);
+  // Conversion failed: the meeting page shows the error instead.
+  if (!m || m.status === 'error' || !m.mediaPath) return;
+  const live = await db.hasLiveTranscript(meetingId).catch(() => false);
+  offerProcessing({ meetingId, durationMs: m.durationMs ?? 0, live });
 }
 
 // If OBS never reports the state change (e.g. it showed an error dialog),
@@ -716,21 +873,26 @@ export async function startRecording(): Promise<void> {
   if (get().recording) return;
   set({ busy: 'starting', error: null });
   try {
+    if (!getSettings().obsScene) await ensureDefaultScene();
     // Make sure the track convention holds before every recording.
     if (!get().setup?.ok) {
       await refreshSetup();
       if (!get().setup?.ok) await configureObs({ auto: true });
     }
+    // The setting may have been switched on since the last configure.
+    await ensureNoiseSuppression().catch((err) => console.warn('OBS: could not add noise suppression', err));
     if (getSettings().liveEnabled) await ensureLiveMuxer();
     const scene = getSettings().obsScene;
     if (scene && get().scenes.includes(scene) && get().currentScene !== scene) {
       await obs.call('SetCurrentProgramScene', { sceneName: scene });
     }
     await prepareMeetingDir();
+    appStarting = true;
     await obs.call('StartRecord');
     clearStaleBusy('starting');
     discardIfNeverStarted();
   } catch (err) {
+    appStarting = false;
     set({ busy: null });
     await discardPreparedRow();
     await restoreRecordPath();
@@ -748,7 +910,7 @@ export async function stopRecording(): Promise<void> {
     if (res.outputPath) {
       set({ recording: false, startedAt: null, paused: false, pausedAt: null, busy: null, recordingPath: null });
       void restoreRecordPath();
-      void handleFinishedRecording(res.outputPath);
+      onRecordingEnded(res.outputPath);
     }
   } catch (err) {
     set({ busy: null });
@@ -867,6 +1029,9 @@ async function discardPreparedRow(): Promise<void> {
 
 // StartRecord succeeded but OBS never reported STARTED (e.g. it showed an error).
 function discardIfNeverStarted() {
+  setTimeout(() => {
+    if (!get().recording) appStarting = false;
+  }, 20000);
   const id = preparedRow?.id;
   if (id == null) return;
   setTimeout(() => {
@@ -902,6 +1067,17 @@ async function placeRecording(meetingId: number, path: string): Promise<string> 
 
 // Folder picker on the Record screen. During a recording it moves the meeting
 // (its files follow when the recording stops).
+// Mutes the mic source in OBS, so neither the recording nor live transcription
+// gets it. It doesn't mute you in the call itself.
+export async function setMicMuted(muted: boolean): Promise<void> {
+  requireConnected();
+  const setup = get().setup ?? (await refreshSetup());
+  if (!setup.micInput) throw new Error('No microphone input in OBS.');
+  await obs.call('SetInputMute', { inputName: setup.micInput, inputMuted: muted });
+  const now = get().setup;
+  if (now) set({ setup: { ...now, micMuted: muted } });
+}
+
 export async function setRecordingFolder(folderId: number | null): Promise<void> {
   set({ folderId });
   const id = get().recordingMeetingId ?? preparedRow?.id ?? null;
@@ -1012,14 +1188,34 @@ export async function selectScene(name: string): Promise<void> {
   }
 }
 
-// Creates (or reuses) a "Meeting" scene with a display capture of the primary
-// monitor, adds audio inputs if OBS has none, and selects it.
-export async function createMeetingScene(): Promise<string> {
+// The scene Meeting Helper sets up for itself. (Older versions made "Meeting";
+// users who picked that keep it.)
+export const MEETING_SCENE = 'Meeting Helper';
+
+// With no scene chosen yet, sets up and selects the Meeting Helper scene. A
+// scene the user picked is never replaced. Never throws.
+async function ensureDefaultScene(): Promise<boolean> {
+  if (getSettings().obsScene || get().recording) return false;
+  try {
+    await createMeetingScene({ auto: true });
+    return true;
+  } catch (err) {
+    console.warn('OBS: could not set up the default scene', err);
+    return false;
+  }
+}
+
+// Creates (or reuses) the "Meeting Helper" scene with a display capture of the
+// primary monitor and selects it. configureObs then gives it its own mic source
+// (and desktop audio if OBS has none) and routes the tracks.
+export async function createMeetingScene(opts: { auto?: boolean } = {}): Promise<string> {
   requireConnected();
-  const sceneName = 'Meeting';
+  const sceneName = MEETING_SCENE;
+  const made: string[] = [];
   await refreshScenes();
   if (!get().scenes.includes(sceneName)) {
     await obs.call('CreateScene', { sceneName });
+    made.push(`Created scene “${sceneName}”`);
   }
 
   const items = await obs.call('GetSceneItemList', { sceneName });
@@ -1033,6 +1229,7 @@ export async function createMeetingScene(): Promise<string> {
       const inputName = uniqueName('Screen', inputs);
       await obs.call('CreateInput', { sceneName, inputName, inputKind: 'monitor_capture', inputSettings: {} });
       await pickPrimaryMonitor(inputName);
+      made.push(`Added a capture of your main display (“${inputName}”) to scene “${sceneName}”`);
       // Fit the capture to the canvas.
       try {
         const { sceneItemId } = await obs.call('GetSceneItemId', { sceneName, sourceName: inputName });
@@ -1058,8 +1255,7 @@ export async function createMeetingScene(): Promise<string> {
   await obs.call('SetCurrentProgramScene', { sceneName });
   await useSettings.getState().update({ obsScene: sceneName });
   await refreshScenes();
-  // Audio inputs are created in the program scene by configureObs if missing.
-  await configureObs({ auto: false });
+  await configureObs({ auto: !!opts.auto, prior: made });
   return sceneName;
 }
 
@@ -1135,13 +1331,23 @@ async function getMuted(inputName: string): Promise<boolean> {
   }
 }
 
-async function findAudioInputs(inputs: InputInfo[]): Promise<{ mic: string | null; desktop: string | null }> {
-  let specials: Record<string, string | null> = {};
+// The global audio devices from OBS → Settings → Audio (desktop1-2, mic1-4).
+// They play in every scene.
+async function getSpecialInputs(): Promise<Record<string, string | null>> {
   try {
-    specials = (await obs.call('GetSpecialInputs')) as unknown as Record<string, string | null>;
+    return (await obs.call('GetSpecialInputs')) as unknown as Record<string, string | null>;
   } catch {
-    /* ignore */
+    return {};
   }
+}
+
+// Which inputs to route: the mic the user already has (the global Mic/Aux
+// first), so the Meeting Helper scene never captures the same mic twice.
+async function findAudioInputs(inputs: InputInfo[]): Promise<{
+  mic: string | null;
+  desktop: string | null;
+}> {
+  const specials = await getSpecialInputs();
   const names = new Set(inputs.map((i) => i.name));
   const desktop =
     (specials.desktop1 && names.has(specials.desktop1) ? specials.desktop1 : null) ??
@@ -1152,6 +1358,45 @@ async function findAudioInputs(inputs: InputInfo[]): Promise<{ mic: string | nul
     inputs.find((i) => i.kind === 'wasapi_input_capture')?.name ??
     null;
   return { mic, desktop };
+}
+
+// Earlier versions gave the Meeting Helper scene its own mic source, which
+// captured the same mic as the user's existing one. Removes those (by their
+// name) when another mic exists. Returns the names removed.
+async function removeExtraSceneMics(inputs: InputInfo[]): Promise<string[]> {
+  const ours = (i: InputInfo) => i.kind === 'wasapi_input_capture' && /^Meeting Helper Mic( \d+)?$/.test(i.name);
+  if (!inputs.some((i) => i.kind === 'wasapi_input_capture' && !ours(i))) return [];
+  const removed: string[] = [];
+  for (const i of inputs.filter(ours)) {
+    await obs.call('RemoveInput', { inputName: i.name });
+    removed.push(i.name);
+  }
+  return removed;
+}
+
+const NOISE_FILTER_KINDS = ['noise_suppress_filter', 'noise_suppress_filter_v2'];
+
+// RNNoise on the recorded mic. A filter belongs to its source, so on a global
+// Mic/Aux device it applies in every scene. Leaves an existing noise filter
+// alone. Returns the source if a filter was added.
+async function ensureNoiseSuppression(source?: string | null): Promise<string | null> {
+  if (!getSettings().micNoiseSuppression) return null;
+  const setup = get().setup;
+  const sourceName = source !== undefined ? source : (setup?.micInput ?? null);
+  if (!sourceName) return null;
+  const r = await obs.call('GetSourceFilterList', { sourceName });
+  const filters = r.filters as { filterName?: string; filterKind?: string }[];
+  if (filters.some((f) => NOISE_FILTER_KINDS.includes(String(f.filterKind ?? '')))) return null;
+  const names = new Set(filters.map((f) => String(f.filterName ?? '')));
+  let filterName = 'Noise Suppression';
+  for (let n = 2; names.has(filterName); n++) filterName = `Noise Suppression ${n}`;
+  await obs.call('CreateSourceFilter', {
+    sourceName,
+    filterName,
+    filterKind: 'noise_suppress_filter_v2',
+    filterSettings: { method: 'rnnoise' },
+  });
+  return sourceName;
 }
 
 function outputOk(out: ObsOutputConfig): { ok: boolean; detail?: string } {
@@ -1239,18 +1484,20 @@ export async function refreshSetup(): Promise<ObsSetup> {
     micMuted,
     desktopMuted,
     checks,
-    ok: checks.every((c) => c.ok || c.id === 'live'),
+    // Neither can be fixed by configureObs, so neither triggers it.
+    ok: checks.every((c) => c.ok || c.id === 'live' || c.id === 'doubleMic'),
   };
   set({ setup });
   return setup;
 }
 
 // "Configure OBS for Meeting Helper". Idempotent; returns what it changed.
-export async function configureObs(opts: { auto?: boolean } = {}): Promise<string[]> {
+// `prior`: changes already made by the caller (createMeetingScene), for the report.
+export async function configureObs(opts: { auto?: boolean; prior?: string[] } = {}): Promise<string[]> {
   requireConnected();
   if (get().recording) throw new Error("OBS can't be reconfigured while recording.");
   configuring = true;
-  const changes: string[] = [];
+  const changes: string[] = [...(opts.prior ?? [])];
   try {
     // 1. Output: record tracks 1-3.
     const out = await refreshOutput();
@@ -1281,8 +1528,13 @@ export async function configureObs(opts: { auto?: boolean } = {}): Promise<strin
 
     // 2. Audio inputs: create if missing, then route to tracks.
     let inputs = await listInputs();
-    let { mic, desktop } = await findAudioInputs(inputs);
     const scene = await targetSceneForInputs();
+    const removed = await removeExtraSceneMics(inputs);
+    if (removed.length) {
+      changes.push(`Removed ${removed.map((n) => `“${n}”`).join(', ')}: it captured the same mic as your existing one`);
+      inputs = await listInputs();
+    }
+    let { mic, desktop } = await findAudioInputs(inputs);
     if (!desktop && scene) {
       const inputName = uniqueName('Desktop Audio', inputs);
       await obs.call('CreateInput', {
@@ -1320,6 +1572,14 @@ export async function configureObs(opts: { auto?: boolean } = {}): Promise<strin
       if (!tracksMatch(t, DESKTOP_TRACKS)) {
         await obs.call('SetInputAudioTracks', { inputName: desktop, inputAudioTracks: DESKTOP_TRACKS });
         changes.push(`Desktop audio “${desktop}”: tracks 1 + 3 (was ${describeTracks(t)})`);
+      }
+    }
+    if (mic) {
+      try {
+        const filtered = await ensureNoiseSuppression(mic);
+        if (filtered) changes.push(`Microphone “${filtered}”: added Noise Suppression (RNNoise)`);
+      } catch (err) {
+        console.warn('OBS: could not add noise suppression', err);
       }
     }
 

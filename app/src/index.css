@@ -1,66 +1,259 @@
 @import "tailwindcss";
 
 /* Semantic color tokens. Use these (bg-bg, bg-panel, text-muted, border-line,
-   bg-accent, text-accent ...) instead of raw Tailwind palette colors so light
-   and dark mode stay consistent. */
+   bg-accent, text-accent ...) instead of raw Tailwind palette colors so the
+   themes stay consistent.
+
+   Theming is driven by attributes on <html>, set from settings by
+   lib/appearance.ts:
+     data-theme  = system | light | dark  (no attribute = system)
+     data-accent = teal | blue | indigo | purple | orange | graphite
+     data-glass  = on                      (liquid glass surfaces)
+     data-material = on                    (Windows Mica/Acrylic shows through)
+   Windows without these attributes (overlay, phone page) follow the system
+   theme with the teal accent. */
+
+/* ---------- Accent presets ----------
+   Each preset defines a light and a dark set; the theme blocks below pick one.
+   Checked for contrast: accent on white/bg, on-accent on accent and accent on
+   accent-soft are all >= 4.5:1. */
 :root {
-  --c-bg: #f5f4f0;
+  --a-l: #0f766e;
+  --a-l-hover: #0b5f58;
+  --a-l-soft: #dcf1ee;
+  --a-l-ink: #0b5f58;
+  --a-d: #2bb3a3;
+  --a-d-hover: #43c7b8;
+  --a-d-soft: #123331;
+  --a-d-ink: #5fd4c5;
+  --a-d-on: #04201d;
+}
+:root[data-accent="blue"] {
+  --a-l: #0a66d6;
+  --a-l-hover: #0852ad;
+  --a-l-soft: #e4eefc;
+  --a-l-ink: #0852ad;
+  --a-d: #4c9dff;
+  --a-d-hover: #6eb0ff;
+  --a-d-soft: #11284a;
+  --a-d-ink: #8cc0ff;
+  --a-d-on: #04152b;
+}
+:root[data-accent="indigo"] {
+  --a-l: #4f46e5;
+  --a-l-hover: #3f37c4;
+  --a-l-soft: #e6e5fb;
+  --a-l-ink: #3f37c4;
+  --a-d: #8f89ff;
+  --a-d-hover: #a6a1ff;
+  --a-d-soft: #22204d;
+  --a-d-ink: #b7b3ff;
+  --a-d-on: #0f0c33;
+}
+:root[data-accent="purple"] {
+  --a-l: #7a3fd1;
+  --a-l-hover: #6230ae;
+  --a-l-soft: #eee5fa;
+  --a-l-ink: #6230ae;
+  --a-d: #b78cff;
+  --a-d-hover: #c6a3ff;
+  --a-d-soft: #2c1f4a;
+  --a-d-ink: #d2b8ff;
+  --a-d-on: #1a0b33;
+}
+:root[data-accent="orange"] {
+  --a-l: #c2410c;
+  --a-l-hover: #9a330a;
+  --a-l-soft: #fdeee6;
+  --a-l-ink: #9a330a;
+  --a-d: #ff8f57;
+  --a-d-hover: #ffa576;
+  --a-d-soft: #3d2214;
+  --a-d-ink: #ffb48c;
+  --a-d-on: #2b0f02;
+}
+:root[data-accent="graphite"] {
+  --a-l: #48484a;
+  --a-l-hover: #3a3a3c;
+  --a-l-soft: #e5e5ea;
+  --a-l-ink: #3a3a3c;
+  --a-d: #c7c7cc;
+  --a-d-hover: #e5e5ea;
+  --a-d-soft: #3a3a3c;
+  --a-d-ink: #e5e5ea;
+  --a-d-on: #1c1c1e;
+}
+
+/* ---------- Light (default) ---------- */
+:root {
+  --c-bg: #f2f2f7;
   --c-panel: #ffffff;
-  --c-sunken: #eeece6;
-  --c-hover: #e9e7e0;
-  --c-line: #e0ddd4;
-  --c-text: #1b1a17;
-  --c-muted: #6b685f;
-  --c-faint: #9b978c;
-  --c-accent: #0f766e;
-  --c-accent-hover: #0b5f58;
-  --c-accent-soft: #d8efec;
+  --c-raised: #ffffff;
+  --c-sunken: #f2f2f7;
+  --c-fill: rgba(118, 118, 128, 0.12);
+  --c-fill-strong: rgba(118, 118, 128, 0.2);
+  --c-hover: rgba(118, 118, 128, 0.12);
+  --c-line: rgba(60, 60, 67, 0.13);
+  --c-text: #1c1c1e;
+  --c-muted: #6b6b70;
+  --c-faint: #737378;
+  --c-accent: var(--a-l);
+  --c-accent-hover: var(--a-l-hover);
+  --c-accent-soft: var(--a-l-soft);
+  --c-accent-ink: var(--a-l-ink);
   --c-on-accent: #ffffff;
-  --c-danger: #c2410c;
-  --c-danger-soft: #fbe5da;
-  --c-warn: #a16207;
+  --c-danger: #b13b0a;
+  --c-danger-soft: #fce8de;
+  --c-warn: #8f5606;
   --c-warn-soft: #fbf1d3;
-  --c-ok: #15803d;
-  --c-ok-soft: #dcf2e3;
-  --c-rec: #dc2626;
+  --c-ok: #137336;
+  --c-ok-soft: #ddf3e4;
+  --c-rec: #c41e1e;
   --c-highlight: #fff1b8;
+  --c-switch-on: #34c759;
+  --c-segment-track: #e3e3e8;
+  --c-segment-thumb: #ffffff;
+  --c-sidebar: rgba(255, 255, 255, 0.55);
+
+  --c-glass: rgba(255, 255, 255, 0.62);
+  --c-glass-border: rgba(255, 255, 255, 0.7);
+  --c-glass-highlight: rgba(255, 255, 255, 0.85);
+  --c-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 30px rgba(0, 0, 0, 0.08);
+  --c-wall-base: #e9ecf3;
+  --c-wall-1: color-mix(in srgb, var(--a-l) 30%, transparent);
+  --c-wall-2: rgba(122, 63, 209, 0.22);
+  --c-wall-3: rgba(234, 140, 70, 0.22);
+  --c-material-tint: rgba(242, 242, 247, 0.35);
+
+  --shadow-card-v: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.05);
+  --shadow-pop-v: 0 2px 6px rgba(0, 0, 0, 0.06), 0 18px 48px rgba(0, 0, 0, 0.16);
   color-scheme: light;
 }
 
+/* ---------- Dark ----------
+   Same block twice: once for "system" when the OS is dark, once for an
+   explicit dark choice. Keep them in sync. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --c-bg: #141413;
-    --c-panel: #1c1c1a;
-    --c-sunken: #111110;
-    --c-hover: #262623;
-    --c-line: #2e2d2a;
-    --c-text: #ecebe6;
-    --c-muted: #a3a097;
-    --c-faint: #6f6c64;
-    --c-accent: #2bb3a3;
-    --c-accent-hover: #43c7b8;
-    --c-accent-soft: #15302d;
-    --c-on-accent: #0b1514;
+  :root:not([data-theme="light"]) {
+    --c-bg: #111113;
+    --c-panel: #1c1c1e;
+    --c-raised: #2c2c2e;
+    --c-sunken: #0b0b0c;
+    --c-fill: rgba(118, 118, 128, 0.24);
+    --c-fill-strong: rgba(118, 118, 128, 0.34);
+    --c-hover: rgba(118, 118, 128, 0.22);
+    --c-line: rgba(255, 255, 255, 0.1);
+    --c-text: #f2f2f7;
+    --c-muted: #a1a1a6;
+    --c-faint: #98989d;
+    --c-accent: var(--a-d);
+    --c-accent-hover: var(--a-d-hover);
+    --c-accent-soft: var(--a-d-soft);
+    --c-accent-ink: var(--a-d-ink);
+    --c-on-accent: var(--a-d-on);
     --c-danger: #f0864f;
     --c-danger-soft: #3a2117;
     --c-warn: #e2b54a;
     --c-warn-soft: #352b12;
-    --c-ok: #4ccb7a;
+    --c-ok: #4cd07a;
     --c-ok-soft: #14301e;
-    --c-rec: #f05252;
+    --c-rec: #ff6961;
     --c-highlight: #4a3f12;
+    --c-switch-on: #30d158;
+    --c-segment-track: rgba(118, 118, 128, 0.24);
+    --c-segment-thumb: #636366;
+    --c-sidebar: rgba(28, 28, 30, 0.6);
+
+    --c-glass: rgba(44, 44, 48, 0.52);
+    --c-glass-border: rgba(255, 255, 255, 0.1);
+    --c-glass-highlight: rgba(255, 255, 255, 0.12);
+    --c-glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    --c-wall-base: #101014;
+    --c-wall-1: color-mix(in srgb, var(--a-d) 40%, #101014);
+    --c-wall-2: #3d2f78;
+    --c-wall-3: #5c381c;
+    --c-material-tint: rgba(0, 0, 0, 0.25);
+
+    --shadow-card-v: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+    --shadow-pop-v: 0 2px 6px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }
 }
+:root[data-theme="dark"] {
+  --c-bg: #111113;
+  --c-panel: #1c1c1e;
+  --c-raised: #2c2c2e;
+  --c-sunken: #0b0b0c;
+  --c-fill: rgba(118, 118, 128, 0.24);
+  --c-fill-strong: rgba(118, 118, 128, 0.34);
+  --c-hover: rgba(118, 118, 128, 0.22);
+  --c-line: rgba(255, 255, 255, 0.1);
+  --c-text: #f2f2f7;
+  --c-muted: #a1a1a6;
+  --c-faint: #98989d;
+  --c-accent: var(--a-d);
+  --c-accent-hover: var(--a-d-hover);
+  --c-accent-soft: var(--a-d-soft);
+  --c-accent-ink: var(--a-d-ink);
+  --c-on-accent: var(--a-d-on);
+  --c-danger: #f0864f;
+  --c-danger-soft: #3a2117;
+  --c-warn: #e2b54a;
+  --c-warn-soft: #352b12;
+  --c-ok: #4cd07a;
+  --c-ok-soft: #14301e;
+  --c-rec: #ff6961;
+  --c-highlight: #4a3f12;
+  --c-switch-on: #30d158;
+  --c-segment-track: rgba(118, 118, 128, 0.24);
+  --c-segment-thumb: #636366;
+  --c-sidebar: rgba(28, 28, 30, 0.6);
+
+  --c-glass: rgba(44, 44, 48, 0.52);
+  --c-glass-border: rgba(255, 255, 255, 0.1);
+  --c-glass-highlight: rgba(255, 255, 255, 0.12);
+  --c-glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  --c-wall-base: #101014;
+  --c-wall-1: color-mix(in srgb, var(--a-d) 40%, #101014);
+  --c-wall-2: #3d2f78;
+  --c-wall-3: #5c381c;
+  --c-material-tint: rgba(0, 0, 0, 0.25);
+
+  --shadow-card-v: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-pop-v: 0 2px 6px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
 
 @theme inline {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  /* Inter is bundled (main.tsx) so the app looks the same on every system. */
+  --font-sans: "Inter Variable", -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Inter Variable", -apple-system, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  /* Rounder everywhere: the stock radius scale is bumped so screens that use
+     rounded-md/lg/xl directly pick up the softer look too. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 18px;
+  --radius-2xl: 22px;
+  --radius-3xl: 28px;
+  --radius-card: 22px;
+  --radius-field: 14px;
+
+  --shadow-card: var(--shadow-card-v);
+  --shadow-pop: var(--shadow-pop-v);
+
+  /* Softer hover/press colour changes everywhere `transition-*` is used. */
+  --default-transition-duration: 200ms;
+  --default-transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 
   --color-bg: var(--c-bg);
   --color-panel: var(--c-panel);
+  --color-raised: var(--c-raised);
   --color-sunken: var(--c-sunken);
+  --color-fill: var(--c-fill);
+  --color-fill-strong: var(--c-fill-strong);
   --color-hover: var(--c-hover);
   --color-line: var(--c-line);
   --color-text: var(--c-text);
@@ -69,6 +262,7 @@
   --color-accent: var(--c-accent);
   --color-accent-hover: var(--c-accent-hover);
   --color-accent-soft: var(--c-accent-soft);
+  --color-accent-ink: var(--c-accent-ink);
   --color-on-accent: var(--c-on-accent);
   --color-danger: var(--c-danger);
   --color-danger-soft: var(--c-danger-soft);
@@ -78,12 +272,19 @@
   --color-ok-soft: var(--c-ok-soft);
   --color-rec: var(--c-rec);
   --color-highlight: var(--c-highlight);
+  --color-switch-on: var(--c-switch-on);
+  --color-segment-track: var(--c-segment-track);
+  --color-segment-thumb: var(--c-segment-thumb);
 }
 
 html,
 body,
 #root {
   height: 100%;
+}
+
+html {
+  background: var(--c-bg);
 }
 
 body {
@@ -100,13 +301,283 @@ body {
   background: var(--c-accent-soft);
 }
 
+/* The transcript word under the pointer (CSS Custom Highlight, so the text's
+   DOM and copied text stay untouched). */
+::highlight(mh-word) {
+  background-color: color-mix(in srgb, var(--c-accent) 12%, transparent);
+  text-decoration: underline dotted var(--c-accent);
+  text-underline-offset: 4px;
+}
+
 /* Thin, quiet scrollbars to match the panel style. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--c-line) transparent;
+  scrollbar-color: var(--c-fill-strong) transparent;
 }
 
-:focus-visible {
-  outline: 2px solid var(--c-accent);
-  outline-offset: 2px;
+/* Keyboard focus ring for buttons and links. Text fields show their own ring
+   (or their container's, like the overlay pill). In a layer so utilities such
+   as outline-none can still turn it off. */
+@layer base {
+  :focus-visible:not(input, textarea, select, [contenteditable]) {
+    outline: 2px solid var(--c-accent);
+    outline-offset: 2px;
+  }
+}
+
+/* ---------- Motion ----------
+   Calm, iOS-like: short distances, ease-out in, a slightly quicker ease-in out,
+   no bounces. Elements opt in with data-motion="<kind>" and flip
+   data-state="closed" just before they unmount (usePresence in ui.tsx keeps
+   them mounted for --dur-out). */
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 0.84, 0.44);
+  --dur-in: 240ms;
+  --dur-out: 160ms;
+  --dur-move: 280ms;
+}
+@keyframes mh-fade-in { from { opacity: 0; } }
+@keyframes mh-fade-out { to { opacity: 0; } }
+@keyframes mh-pop-in { from { opacity: 0; transform: translateY(6px) scale(0.96); } }
+@keyframes mh-pop-out { to { opacity: 0; transform: translateY(4px) scale(0.97); } }
+@keyframes mh-drop-in { from { opacity: 0; transform: translateY(-6px) scale(0.98); } }
+@keyframes mh-drop-out { to { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+@keyframes mh-rise-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
+@keyframes mh-rise-out { to { opacity: 0; transform: translateY(4px) scale(0.98); } }
+@keyframes mh-up-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes mh-up-out { to { opacity: 0; transform: translateY(4px); } }
+@keyframes mh-down-in { from { opacity: 0; transform: translateY(-6px); } }
+@keyframes mh-down-out { to { opacity: 0; transform: translateY(-4px); } }
+
+[data-motion] {
+  animation-duration: var(--dur-in);
+  animation-timing-function: var(--ease-out);
+  animation-fill-mode: both;
+}
+[data-motion][data-state="closed"] {
+  animation-duration: var(--dur-out);
+  animation-timing-function: var(--ease-in);
+  pointer-events: none;
+}
+[data-motion="fade"] { animation-name: mh-fade-in; }
+[data-motion="fade"][data-state="closed"] { animation-name: mh-fade-out; }
+[data-motion="pop"] { animation-name: mh-pop-in; }
+[data-motion="pop"][data-state="closed"] { animation-name: mh-pop-out; }
+[data-motion="drop"] { animation-name: mh-drop-in; }
+[data-motion="drop"][data-state="closed"] { animation-name: mh-drop-out; }
+[data-motion="rise"] { animation-name: mh-rise-in; }
+[data-motion="rise"][data-state="closed"] { animation-name: mh-rise-out; }
+[data-motion="up"] { animation-name: mh-up-in; }
+[data-motion="up"][data-state="closed"] { animation-name: mh-up-out; }
+[data-motion="down"] { animation-name: mh-down-in; }
+[data-motion="down"][data-state="closed"] { animation-name: mh-down-out; }
+
+/* Height reveal (Collapse in ui.tsx): grid rows 0fr → 1fr plus opacity. */
+.mh-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--dur-move) var(--ease-out),
+    opacity var(--dur-out) var(--ease-in);
+}
+.mh-collapse[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows var(--dur-move) var(--ease-out),
+    opacity var(--dur-in) var(--ease-out) 40ms;
+}
+.mh-collapse > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Reduced motion: no movement, a quick cross-fade at most. */
+@media (prefers-reduced-motion: reduce) {
+  [data-motion] { animation-name: mh-fade-in !important; animation-duration: 120ms; }
+  [data-motion][data-state="closed"] { animation-name: mh-fade-out !important; animation-duration: 100ms; }
+  .mh-collapse,
+  .mh-collapse[data-open="true"] { transition: none; }
+  .motion-slide { transition: none !important; }
+}
+
+/* Component classes live in the components layer so utilities on the same
+   element (bg-*, shadow-*) still win. The glass rules below are unlayered on
+   purpose: they must beat utilities. */
+@layer components {
+/* Native <select> with our own chevron (the stock arrow ignores the pill shape). */
+.select-chevron {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b6b70' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .select-chevron {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
+}
+:root[data-theme="dark"] .select-chevron {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+select option {
+  background: var(--c-raised);
+  color: var(--c-text);
+}
+
+/* ---------- Surfaces ----------
+   .surface = a card. .surface-pop = menus, popovers, dialogs (always opaque
+   enough to read over content). .sidebar = the main navigation column. */
+.surface {
+  background: var(--c-panel);
+  box-shadow: var(--shadow-card-v);
+}
+.surface-pop {
+  background: var(--c-raised);
+  box-shadow: var(--shadow-pop-v);
+}
+.sidebar {
+  background: var(--c-sidebar);
+  border-right: 1px solid var(--c-line);
+}
+}
+
+/* ---------- Liquid glass ---------- */
+:root[data-glass="on"] body {
+  background-color: var(--c-wall-base);
+  background-image:
+    radial-gradient(38% 50% at 8% 6%, var(--c-wall-1), transparent 70%),
+    radial-gradient(36% 46% at 96% 40%, var(--c-wall-2), transparent 70%),
+    radial-gradient(42% 44% at 45% 108%, var(--c-wall-3), transparent 70%);
+  background-attachment: fixed;
+}
+:root[data-glass="on"] {
+  background: var(--c-wall-base);
+}
+
+/* With a Windows material the desktop shows through: everything transparent
+   except a light tint so text keeps its contrast. */
+:root[data-glass="on"][data-material="on"],
+:root[data-glass="on"][data-material="on"] body {
+  background: transparent;
+}
+:root[data-glass="on"][data-material="on"] body {
+  background-color: var(--c-material-tint);
+}
+
+:root[data-glass="on"] .surface,
+:root[data-glass="on"] .glass-card,
+/* Card-like blocks that screens draw by hand (rounded-xl + border + panel). */
+:root[data-glass="on"] .rounded-xl.border.bg-panel {
+  background: var(--c-glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  backdrop-filter: blur(28px) saturate(1.7);
+  border: 1px solid var(--c-glass-border);
+  box-shadow: inset 0 1px 0 var(--c-glass-highlight), var(--c-glass-shadow);
+}
+:root[data-glass="on"] .sidebar {
+  margin: 10px 0 10px 10px;
+  border-radius: 22px;
+  background: var(--c-glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  backdrop-filter: blur(28px) saturate(1.7);
+  border: 1px solid var(--c-glass-border);
+  box-shadow: inset 0 1px 0 var(--c-glass-highlight), var(--c-glass-shadow);
+}
+:root[data-glass="on"] .surface-pop {
+  /* Menus and dialogs sit over text, so they stay nearly opaque. */
+  background: color-mix(in srgb, var(--c-raised) 94%, transparent);
+  -webkit-backdrop-filter: blur(30px) saturate(1.8);
+  backdrop-filter: blur(30px) saturate(1.8);
+  border-color: var(--c-glass-border);
+}
+
+/* Respect "reduce transparency": fall back to the solid look. */
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-glass="on"] .surface,
+  :root[data-glass="on"] .glass-card,
+  :root[data-glass="on"] .rounded-xl.border.bg-panel,
+  :root[data-glass="on"] .sidebar,
+  :root[data-glass="on"] .surface-pop {
+    background: var(--c-panel);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* ---------- Live overlay window (#/overlay) ----------
+   A transparent, frameless window: only the pill and its cards are painted.
+   backdrop-filter can't blur the desktop behind a transparent WebView, so the
+   glass is a dark translucent fill with a hairline border and inset highlight. */
+html.overlay,
+html.overlay body,
+html.overlay #root {
+  height: auto;
+  background: transparent !important;
+  overflow: hidden;
+  color-scheme: dark;
+}
+html.overlay body {
+  color: #f2f2f7;
+}
+html.overlay {
+  --dur-out: 180ms;
+}
+/* The whole overlay fades and settles in when the window opens, and out
+   before it closes. Opacity and transform only: the window never resizes for
+   an animation. */
+@keyframes mh-ov-open { from { opacity: 0; transform: scale(0.96); } }
+@keyframes mh-ov-close { to { opacity: 0; transform: scale(0.97); } }
+.ov-root {
+  transform-origin: 50% 40%;
+  animation: mh-ov-open 260ms var(--ease-out) both;
+}
+.ov-root[data-closing="true"] {
+  animation: mh-ov-close 180ms var(--ease-in) both;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-root { animation-name: mh-fade-in; }
+  .ov-root[data-closing="true"] { animation-name: mh-fade-out; }
+}
+.ov-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: #d1d1d6;
+  transition: background-color 200ms, color 200ms;
+}
+.ov-action:hover {
+  background: rgb(255 255 255 / 0.1);
+  color: #fff;
+}
+/* Settings → Appearance → Overlay background: Solid (set on <html> by the overlay). */
+html.ov-solid .ov-glass {
+  background: #1c1c1e;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.ov-glass {
+  background: rgba(30, 30, 34, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.ov-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #d1d1d6;
+}
+.ov-icon:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
 }

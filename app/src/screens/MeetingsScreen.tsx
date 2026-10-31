@@ -1,7 +1,8 @@
-import { AudioLines, CircleDot, Folder as FolderIcon, FolderInput, Inbox, Library, Pencil, RotateCcw, Trash2, Upload, Video } from 'lucide-react';
+import { AudioLines, CircleDot, FileArchive, Folder as FolderIcon, FolderInput, Inbox, Library, Pencil, RotateCcw, Sparkles, Trash2, Upload, Video } from 'lucide-react';
 import { useCallback, useEffect, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DeleteMeetingModal, pickAndImportRecording } from '../components/meeting/actions';
+import { ImportMeetingModal, pickMeetingZip, startMeetingZipImport } from '../components/meeting/ShareMeeting';
 import { MenuItem, MenuLabel, MenuSeparator, Popover, StatusBadge, isAudioPath, isJobActive } from '../components/meeting/shared';
 import {
   Button,
@@ -11,7 +12,6 @@ import {
   IconButton,
   Input,
   PageHeader,
-  Select,
   Spinner,
   clsx,
   errorMessage,
@@ -19,6 +19,7 @@ import {
 } from '../components/ui';
 import * as db from '../lib/db';
 import { formatDate, formatDuration } from '../lib/format';
+import type { SingleMeetingZip } from '../lib/backup';
 import { moveMeetingToFolder, refreshFolders, useFolders } from '../lib/folders';
 import { onMeetingChanged, transcribeMeeting, useJobs } from '../lib/pipeline';
 import type { Folder, Meeting } from '../lib/types';
@@ -36,6 +37,8 @@ export default function MeetingsScreen() {
   const folders = useFolders((s) => s.folders);
   const [filter, setFilter] = useState<FolderFilter>('all');
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [zipImporting, setZipImporting] = useState(false);
+  const [pendingZip, setPendingZip] = useState<SingleMeetingZip | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -78,6 +81,21 @@ export default function MeetingsScreen() {
     }
   };
 
+  // A meeting file from someone (or any Meeting Helper zip).
+  const importMeetingFile = async () => {
+    const path = await pickMeetingZip();
+    if (!path) return;
+    setZipImporting(true);
+    try {
+      const res = await startMeetingZipImport(path, setPendingZip);
+      if (res) refresh();
+    } catch (err) {
+      toast(`Import failed: ${errorMessage(err)}`, 'error');
+    } finally {
+      setZipImporting(false);
+    }
+  };
+
   const moveTo = async (m: Meeting, folderId: number | null) => {
     try {
       await moveMeetingToFolder(m.id, folderId);
@@ -110,42 +128,57 @@ export default function MeetingsScreen() {
       {importStatus ?? 'Import recording'}
     </Button>
   );
+  const importFileButton = (
+    <Button variant="secondary" size="lg" icon={FileArchive} loading={zipImporting} onClick={importMeetingFile}>
+      Import meeting file…
+    </Button>
+  );
 
   return (
-    <div className="mx-auto max-w-5xl px-8 py-8">
+    <div className="mx-auto max-w-7xl px-8 py-8">
       <PageHeader
         title="Meetings"
         description="Your recordings and their transcripts."
         actions={
           meetings && meetings.length > 0 ? (
             <>
-              {folders.length > 0 && (
-                <Select
-                  aria-label="Folder"
-                  value={String(filter)}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setFilter(v === 'all' || v === 'unsorted' ? v : Number(v));
-                  }}
-                  className="h-11 w-auto max-w-56"
-                >
-                  <option value="all">All folders</option>
-                  <option value="unsorted">Unsorted</option>
-                  {folders.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
-                </Select>
-              )}
               <Button variant="secondary" size="lg" icon={CircleDot} onClick={() => navigate('/record')}>
                 Record
               </Button>
+              {importFileButton}
               {importButton}
             </>
           ) : undefined
         }
       />
+
+      {meetings && meetings.length > 0 && folders.length > 0 && (
+        <div role="group" aria-label="Folder" className="-mx-1 mb-4 flex gap-2 overflow-x-auto px-1 pb-1">
+          {([
+            { value: 'all', label: 'All', icon: undefined },
+            { value: 'unsorted', label: 'Unsorted', icon: Inbox },
+            ...folders.map((f) => ({ value: f.id, label: f.name, icon: FolderIcon })),
+          ] as { value: FolderFilter; label: string; icon?: typeof Inbox }[]).map((o) => {
+            const selected = filter === o.value;
+            const Icon = o.icon;
+            return (
+              <button
+                key={String(o.value)}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => setFilter(o.value)}
+                className={clsx(
+                  'inline-flex h-8 max-w-56 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium whitespace-nowrap transition-colors',
+                  selected ? 'bg-accent text-on-accent' : 'bg-fill text-text hover:bg-fill-strong',
+                )}
+              >
+                {Icon && <Icon size={13} className={clsx('shrink-0', !selected && 'text-muted')} />}
+                <span className="truncate">{o.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {loadError && (
         <Callout tone="error" title="Couldn't load meetings" className="mb-4">
@@ -169,6 +202,7 @@ export default function MeetingsScreen() {
                 <Button variant="secondary" size="lg" icon={CircleDot} onClick={() => navigate('/record')}>
                   Start recording
                 </Button>
+                {importFileButton}
               </div>
             }
           />
@@ -176,7 +210,7 @@ export default function MeetingsScreen() {
       ) : (
         <Card padded={false}>
           {shown && !shown.length && <p className="px-5 py-8 text-center text-sm text-muted">No meetings in this folder.</p>}
-          <ul className="divide-y divide-line">
+          <ul className="space-y-0.5 p-2">
             {(shown ?? []).map((m) => (
               <MeetingRow
                 key={m.id}
@@ -195,6 +229,16 @@ export default function MeetingsScreen() {
           </ul>
         </Card>
       )}
+
+      <ImportMeetingModal
+        pending={pendingZip}
+        onClose={() => setPendingZip(null)}
+        onImported={(id) => {
+          setPendingZip(null);
+          if (id != null) navigate(`/meetings/${id}`);
+          else refresh();
+        }}
+      />
 
       <DeleteMeetingModal
         meeting={deleting}
@@ -256,10 +300,10 @@ function MeetingRow({
 
   return (
     <li
-      className={clsx('group flex items-center gap-4 px-5 py-4 transition-colors', !renaming && 'cursor-pointer hover:bg-hover/50')}
+      className={clsx('group flex items-center gap-3.5 rounded-2xl px-3 py-3 transition-colors', !renaming && 'cursor-pointer hover:bg-hover')}
       onClick={renaming ? undefined : onOpen}
     >
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sunken text-muted">
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-accent-soft text-accent-ink">
         {audio ? <AudioLines size={18} /> : <Video size={18} />}
       </div>
 
@@ -272,18 +316,18 @@ function MeetingRow({
             onFocus={(e) => e.currentTarget.select()}
             onKeyDown={onTitleKey}
             onBlur={(e) => onRename(e.currentTarget.value)}
-            className="h-8 max-w-md"
+            className="h-8 max-w-md text-[15px]"
           />
         ) : (
-          <div className="truncate text-[15px] font-medium">{m.title || 'Untitled meeting'}</div>
+          <div className="truncate text-[15px] font-semibold">{m.title || 'Untitled meeting'}</div>
         )}
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] text-muted">
           <span>{formatDate(m.createdAt)}</span>
-          <span className="text-faint">·</span>
+          <span aria-hidden>·</span>
           <span>{formatDuration(m.durationMs)}</span>
           {folder && (
             <>
-              <span className="text-faint">·</span>
+              <span aria-hidden>·</span>
               <span className="inline-flex min-w-0 items-center gap-1">
                 <FolderIcon size={12} className="shrink-0" />
                 <span className="truncate">{folder.name}</span>
@@ -292,8 +336,8 @@ function MeetingRow({
           )}
           {active && (
             <>
-              <span className="text-faint">·</span>
-              <span className="truncate text-accent">{job.message}</span>
+              <span aria-hidden>·</span>
+              <span className="truncate text-accent-ink">{job.message}</span>
             </>
           )}
         </div>
@@ -308,13 +352,19 @@ function MeetingRow({
             Retry
           </Button>
         )}
+        {/* Left untranscribed ("Not now" after recording, or autoTranscribe off). */}
+        {m.status === 'queued' && !active && !!m.mediaPath && (
+          <Button size="sm" variant="secondary" icon={Sparkles} loading={retrying} onClick={retry}>
+            Transcribe
+          </Button>
+        )}
         <StatusBadge status={m.status} job={job} />
         <div className="flex items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
           <IconButton icon={Pencil} label="Rename" onClick={onStartRename} />
           {(folders.length > 0 || folder) && (
             <div className="relative">
               <IconButton icon={FolderInput} label="Move to folder" onClick={() => setMoveOpen((v) => !v)} disabled={m.status === 'recording'} />
-              <Popover open={moveOpen} onClose={() => setMoveOpen(false)} className="top-full right-0 mt-1 w-56">
+              <Popover open={moveOpen} onClose={() => setMoveOpen(false)} className="top-full right-0 mt-1.5 w-56">
                 <MenuLabel>Move to</MenuLabel>
                 <MenuItem
                   icon={Inbox}

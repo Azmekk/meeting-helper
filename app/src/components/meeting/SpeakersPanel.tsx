@@ -1,9 +1,9 @@
-import { Plus, UserPlus, Users } from 'lucide-react';
+import { Plus, UserPlus } from 'lucide-react';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { formatDuration } from '../../lib/format';
 import type { Segment, Speaker } from '../../lib/types';
 import { Badge, Button, Card, Input } from '../ui';
-import { SpeakerDot } from './shared';
+import { SpeakerAvatar } from './shared';
 
 export function SpeakersPanel({
   speakers,
@@ -57,15 +57,10 @@ export function SpeakersPanel({
 
   return (
     <Card
-      title={
-        <span className="flex items-center gap-2">
-          <Users size={15} className="text-muted" />
-          Speakers
-        </span>
-      }
+      title="Speakers"
       actions={
         !adding && (
-          <Button size="sm" variant="ghost" icon={UserPlus} onClick={() => setAdding(true)}>
+          <Button size="sm" variant="secondary" icon={UserPlus} onClick={() => setAdding(true)}>
             Add
           </Button>
         )
@@ -82,7 +77,7 @@ export function SpeakersPanel({
         <p className="px-5 py-4 text-[13px] text-muted">No speakers in this transcript.</p>
       )}
 
-      <ul className="divide-y divide-line">
+      <ul className="space-y-0.5 px-2 pt-1 pb-2">
         {speakers.map((sp) => {
           const st = stats.get(sp.id);
           return (
@@ -152,9 +147,9 @@ function SpeakerRow({
   };
 
   return (
-    <li className="px-4 py-3">
+    <li className="rounded-2xl px-3 py-2 transition-colors hover:bg-hover/50">
       <div className="flex items-center gap-2.5">
-        <SpeakerDot color={color} />
+        <SpeakerAvatar name={speaker.name || speaker.label} color={color} />
         <Input
           list={listId}
           value={value}
@@ -169,18 +164,18 @@ function SpeakerRow({
               e.currentTarget.blur();
             }
           }}
-          className="h-8 border-transparent bg-transparent px-2 font-medium shadow-none hover:border-line"
+          className="h-8 bg-transparent px-2.5 text-[14px] font-medium shadow-none"
         />
         {speaker.isSelf && <Badge tone="accent">You</Badge>}
       </div>
-      <div className="mt-1.5 flex items-center gap-3 pl-5 text-xs text-muted">
+      <div className="mt-0.5 flex items-center gap-2 pl-[38px] text-xs text-muted">
         <span>{formatDuration(talkMs)}</span>
-        <span className="text-faint">·</span>
+        <span aria-hidden>·</span>
         <span>
           {count} segment{count === 1 ? '' : 's'}
         </span>
-        {speaker.name && <span className="truncate text-faint">({speaker.label})</span>}
-        <div className="ml-auto h-1 w-16 overflow-hidden rounded-full bg-sunken">
+        {speaker.name && <span className="truncate">({speaker.label})</span>}
+        <div className="ml-auto h-1.5 w-14 shrink-0 overflow-hidden rounded-full bg-fill">
           <div className="h-full rounded-full" style={{ width: `${Math.round(share * 100)}%`, backgroundColor: color }} />
         </div>
       </div>

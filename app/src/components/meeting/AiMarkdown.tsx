@@ -85,7 +85,7 @@ function renderEmphasis(text: string, key: string): ReactNode[] {
       );
     if (part.startsWith('`') && part.endsWith('`'))
       return (
-        <code key={k} className="rounded bg-sunken px-1 py-0.5 font-mono text-[0.9em]">
+        <code key={k} className="rounded-md bg-fill px-1.5 py-0.5 font-mono text-[0.88em]">
           {part.slice(1, -1)}
         </code>
       );
@@ -101,7 +101,7 @@ export function CiteChip({ segId, resolve, onCite }: { segId: number } & CitePro
     return (
       <span
         title="This line isn't in the current transcript"
-        className="mx-0.5 inline-flex rounded px-1 align-baseline text-[11px] text-faint tabular-nums line-through"
+        className="ml-1 inline-block rounded-full bg-fill px-[7px] align-baseline text-[12px] leading-5 font-semibold text-muted tabular-nums line-through"
       >
         #{segId}
       </span>
@@ -113,7 +113,7 @@ export function CiteChip({ segId, resolve, onCite }: { segId: number } & CitePro
       type="button"
       onClick={() => onCite(segId)}
       title={`${target.speaker}: ${preview}`}
-      className="mx-0.5 inline-flex items-center rounded bg-accent-soft px-1 align-baseline text-[11px] font-medium text-accent tabular-nums transition-colors hover:bg-accent hover:text-on-accent"
+      className="ml-1 inline-block rounded-full bg-accent-soft px-[7px] align-baseline text-[12px] leading-5 font-semibold text-accent-ink tabular-nums transition-colors hover:bg-accent hover:text-on-accent"
     >
       {formatTimestamp(target.startMs)}
     </button>
@@ -133,24 +133,24 @@ function renderInline(text: string, cite: CiteProps, key: string): ReactNode[] {
 export function AiMarkdown({ text, className, ...cite }: { text: string; className?: string } & CiteProps) {
   const blocks = parseBlocks(text);
   return (
-    <div className={clsx('space-y-2.5 text-sm leading-relaxed text-text', className)}>
+    <div className={clsx('space-y-3 text-[15px] leading-[1.6] text-text', className)}>
       {blocks.map((b, i) => {
         const key = String(i);
         switch (b.type) {
           case 'heading':
             return b.level <= 2 ? (
-              <h3 key={key} className="pt-2 text-[15px] font-semibold first:pt-0">
+              <h3 key={key} className="pt-3 text-[13px] font-semibold tracking-[0.04em] text-muted uppercase first:pt-0">
                 {renderInline(b.text, cite, key)}
               </h3>
             ) : (
-              <h4 key={key} className="pt-1 text-sm font-semibold first:pt-0">
+              <h4 key={key} className="pt-1 text-[15px] font-semibold first:pt-0">
                 {renderInline(b.text, cite, key)}
               </h4>
             );
           case 'list': {
             const Tag = b.ordered ? 'ol' : 'ul';
             return (
-              <Tag key={key} className={clsx('space-y-1 pl-5', b.ordered ? 'list-decimal' : 'list-disc', 'marker:text-faint')}>
+              <Tag key={key} className={clsx('space-y-1.5 pl-5', b.ordered ? 'list-decimal' : 'list-disc', 'marker:text-faint')}>
                 {b.items.map((it, j) => (
                   <li key={j} style={it.indent ? { marginLeft: `${it.indent * 1.25}rem` } : undefined}>
                     {renderInline(it.text, cite, `${key}-${j}`)}
@@ -161,7 +161,7 @@ export function AiMarkdown({ text, className, ...cite }: { text: string; classNa
           }
           case 'quote':
             return (
-              <blockquote key={key} className="border-l-2 border-line pl-3 text-muted">
+              <blockquote key={key} className="rounded-r-xl border-l-[3px] border-accent/40 bg-fill py-1.5 pr-3 pl-3 text-muted">
                 {renderInline(b.text, cite, key)}
               </blockquote>
             );

@@ -43,6 +43,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # Secret Service (GNOME Keyring / KWallet; needs libdbus-1-dev to build).
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

@@ -89,7 +89,7 @@ export function FfmpegSection() {
                 <span key={cmd}>
                   {i === 1 && '(or '}
                   {i > 1 && ' / '}
-                  <code className="rounded bg-sunken px-1 font-mono text-[12px] text-text">{cmd}</code>
+                  <code className="rounded-md bg-fill px-1.5 font-mono text-[12px] text-text">{cmd}</code>
                   {i > 0 && i === FFMPEG_INSTALL.length - 1 && ')'}{' '}
                 </span>
               ))}

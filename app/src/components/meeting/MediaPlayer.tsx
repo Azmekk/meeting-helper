@@ -48,9 +48,9 @@ export function MediaPlayer({
 
   if (audioOnly) {
     return (
-      <div className="rounded-xl border border-line bg-panel p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <div className="surface rounded-card p-4">
         <div className="mb-3 flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent-ink">
             <AudioLines size={18} />
           </div>
           <div className="min-w-0 text-[13px]">
@@ -65,14 +65,14 @@ export function MediaPlayer({
           }}
           {...common}
           onLoadedMetadata={onReady}
-          className="w-full"
+          className="h-10 w-full"
         />
       </div>
     );
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-black shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+    <div className="overflow-hidden rounded-card bg-black shadow-card">
       <video
         key={src}
         ref={(el) => {

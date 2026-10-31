@@ -106,6 +106,12 @@ export function importZip(args: { zipPath: string; destDir: string }, onProgress
   return invoke('import_zip', { args, onProgress: progressChannel(onProgress) });
 }
 
+// One text entry of a zip (e.g. manifest.json) without unpacking it; null when
+// it isn't there.
+export function readZipText(zipPath: string, name: string): Promise<string | null> {
+  return invoke('read_zip_text', { zipPath, name });
+}
+
 export interface S3Config {
   endpoint: string;
   region: string; // 'auto' for R2

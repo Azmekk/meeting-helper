@@ -38,12 +38,12 @@ export function CloudMediaBanner({ meeting }: { meeting: Meeting }) {
           <p>
             Downloading… {formatBytes(progress.done)} of {formatBytes(progress.total)}
           </p>
-          <div className="h-1.5 overflow-hidden rounded-full bg-sunken">
+          <div className="h-1.5 overflow-hidden rounded-full bg-fill-strong">
             <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${pct ?? 0}%` }} />
           </div>
         </div>
       ) : (
-        <Button size="sm" className="mt-1" icon={CloudDownload} onClick={download}>
+        <Button size="sm" variant="primary" className="mt-1.5" icon={CloudDownload} onClick={download}>
           Download recording ({formatBytes(size ?? 0)})
         </Button>
       )}

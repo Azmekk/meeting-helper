@@ -27,6 +27,8 @@ export interface Settings {
   obsPort: number;
   // Last OBS scene picked on the Record screen.
   obsScene: string;
+  // OBS Noise Suppression (RNNoise) on the recorded mic, if it has no noise filter.
+  micNoiseSuppression: boolean;
   // Look for a newer release on GitHub at start-up and every few hours.
   checkForUpdates: boolean;
   // A release the user said to skip; not announced again.
@@ -37,6 +39,10 @@ export interface Settings {
   aiLiveModel: string; // rolling live notes
   aiAnswerModel: string; // "help me answer"
   aiSummaryModel: string; // summaries, chat, folder work
+  // Which models the pickers list: the newest of each family, everything, or
+  // the ones ticked in Settings → AI (aiCustomModels).
+  aiModelList: 'latest' | 'all' | 'custom';
+  aiCustomModels: string[];
   // 'meeting' = same language as the meeting, otherwise a language code.
   aiOutputLanguage: string;
   // Live transcription (Soniox real-time) and live AI while recording.
@@ -70,7 +76,18 @@ export interface Settings {
   remoteEnabled: boolean;
   remotePort: number;
   secretHotkey: string;
+  // Appearance (applied by appearance.ts as attributes on <html>).
+  appearanceTheme: 'system' | 'light' | 'dark';
+  appearanceAccent: AccentId;
+  // Translucent "liquid glass" sidebar and cards.
+  appearanceGlass: boolean;
+  // With glass on (Windows 11): let the desktop show through the window.
+  appearanceMaterial: 'none' | 'mica' | 'acrylic';
+  // The live overlay's capsules: slightly see-through, or fully opaque for readability.
+  overlaySolid: boolean;
 }
+
+export type AccentId = 'teal' | 'blue' | 'indigo' | 'purple' | 'orange' | 'graphite';
 
 export const DEFAULT_SETTINGS: Settings = {
   defaultProvider: 'soniox',
@@ -84,6 +101,7 @@ export const DEFAULT_SETTINGS: Settings = {
   obsHost: '127.0.0.1',
   obsPort: 4455,
   obsScene: '',
+  micNoiseSuppression: true,
   checkForUpdates: true,
   skippedVersion: '',
   aiProvider: 'anthropic',
@@ -91,6 +109,8 @@ export const DEFAULT_SETTINGS: Settings = {
   aiLiveModel: '',
   aiAnswerModel: '',
   aiSummaryModel: '',
+  aiModelList: 'latest',
+  aiCustomModels: [],
   aiOutputLanguage: 'meeting',
   liveEnabled: false,
   liveHotkey: 'CommandOrControl+Alt+H',
@@ -110,6 +130,11 @@ export const DEFAULT_SETTINGS: Settings = {
   remoteEnabled: false,
   remotePort: 4810,
   secretHotkey: 'CommandOrControl+Alt+M',
+  appearanceTheme: 'system',
+  appearanceAccent: 'teal',
+  appearanceGlass: false,
+  appearanceMaterial: 'mica',
+  overlaySolid: false,
 };
 
 interface SettingsState {

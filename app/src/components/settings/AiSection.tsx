@@ -2,14 +2,14 @@
 // output language.
 import { Eye, EyeOff, FlaskConical, KeyRound, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { AI_PROVIDER_IDS, getAiProvider, sortModels, type AiProvider, type AiProviderId } from '../../lib/ai';
+import { AI_PROVIDER_IDS, getAiProvider, pickerModels, sortModels, type AiProvider, type AiProviderId } from '../../lib/ai';
 import { estimateCost } from '../../lib/ai/pricing';
 import { languageName } from '../../lib/ai/prompts';
 import { OUTPUT_LANGUAGES } from '../ai/AiLanguageSelect';
 import { KEY_STORE } from '../../lib/platform';
 import { deleteSecret, getSecret, setSecret } from '../../lib/secrets';
 import { useSettings, type Settings } from '../../lib/settings';
-import { Badge, Button, Callout, Card, Field, IconButton, Input, Select, Spinner, Switch, errorMessage, toast } from '../ui';
+import { Badge, Button, Callout, Card, Field, IconButton, Input, Segmented, Select, Spinner, errorMessage, toast } from '../ui';
 import { CommitInput, ExtLink, saveSettings } from './common';
 
 const INFO: Record<AiProviderId, { tagline: string; keyUrl?: string; privacy: string }> = {
@@ -345,7 +345,6 @@ function priceHint(model: string): string {
 
 function ModelPickers({ provider, models, canList }: { provider: AiProvider; models: ModelsState; canList: boolean }) {
   const settings = useSettings((s) => s.settings);
-  const [showAll, setShowAll] = useState(false);
   const { default: recommended, budget } = provider.recommendedModels;
 
   if (!canList) {
@@ -367,7 +366,7 @@ function ModelPickers({ provider, models, canList }: { provider: AiProvider; mod
 
   // Without a list (endpoint doesn't support /models), fall back to typing an id.
   const listed = models.kind === 'ok' ? models.ids : [];
-  const { recommended: top, rest } = sortModels(provider, listed);
+  const { recommended: top, rest } = pickerModels(provider, listed, settings);
   const noList = models.kind === 'error' || listed.length === 0;
 
   return (
@@ -403,7 +402,7 @@ function ModelPickers({ provider, models, canList }: { provider: AiProvider; mod
             ) : (
               <Select value={value} onChange={(e) => saveSettings({ [t.key]: e.target.value })}>
                 <option value="">{recommended ? `Recommended (${recommended})` : 'Choose a model…'}</option>
-                {value && !top.includes(value) && !(showAll && rest.includes(value)) && <option value={value}>{value}</option>}
+                {value && !top.includes(value) && !rest.includes(value) && <option value={value}>{value}</option>}
                 {top.length > 0 && (
                   <optgroup label="Recommended">
                     {top.map((m) => (
@@ -414,8 +413,8 @@ function ModelPickers({ provider, models, canList }: { provider: AiProvider; mod
                     ))}
                   </optgroup>
                 )}
-                {showAll && rest.length > 0 && (
-                  <optgroup label="All models">
+                {rest.length > 0 && (
+                  <optgroup label="Other models">
                     {rest.map((m) => (
                       <option key={m} value={m}>
                         {m}
@@ -429,21 +428,69 @@ function ModelPickers({ provider, models, canList }: { provider: AiProvider; mod
         );
       })}
 
-      {!noList && rest.length > 0 && (
-        <div className="flex items-center justify-between gap-6">
-          <div>
-            <div className="text-sm font-medium">Show all models</div>
-            <div className="text-xs text-muted">{rest.length} more available from {provider.name}.</div>
-          </div>
-          <Switch label="Show all models" checked={showAll} onChange={setShowAll} />
-        </div>
-      )}
+      {!noList && <ModelListChoice provider={provider} ids={listed} />}
 
       {provider.id === 'anthropic' && (
         <p className="text-xs text-muted">
           The budget model is fine for quick notes but has added details that weren't said in testing; prefer the
           default for summaries and answers.
         </p>
+      )}
+    </div>
+  );
+}
+
+// Settings → AI: which models the pickers here, on the Record screen, in the
+// overlay and on the phone offer.
+function ModelListChoice({ provider, ids }: { provider: AiProvider; ids: string[] }) {
+  const mode = useSettings((s) => s.settings.aiModelList);
+  const custom = useSettings((s) => s.settings.aiCustomModels);
+  const { recommended, rest } = sortModels(provider, ids);
+  const pinned = new Set(recommended);
+  const toggle = (id: string, on: boolean) =>
+    saveSettings({ aiCustomModels: on ? [...custom.filter((m) => m !== id), id] : custom.filter((m) => m !== id) });
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium">Models in lists</div>
+          <div className="text-xs text-muted">
+            {mode === 'latest'
+              ? 'The newest version of each model; older versions and dated snapshots are hidden.'
+              : mode === 'all'
+                ? `Every model ${provider.name} offers (${ids.length}).`
+                : 'Only the models you tick, plus the recommended ones.'}
+          </div>
+        </div>
+        <Segmented
+          label="Models in lists"
+          size="sm"
+          value={mode}
+          onChange={(v) => saveSettings({ aiModelList: v })}
+          options={[
+            { value: 'latest', label: 'Latest' },
+            { value: 'all', label: 'All' },
+            { value: 'custom', label: 'Choose' },
+          ]}
+        />
+      </div>
+      {mode === 'custom' && (
+        <div className="max-h-64 overflow-y-auto rounded-field border border-line p-1.5">
+          {[...recommended, ...rest].map((id) => (
+            <label key={id} className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] hover:bg-hover">
+              <input
+                type="checkbox"
+                checked={pinned.has(id) || custom.includes(id)}
+                disabled={pinned.has(id)}
+                onChange={(e) => toggle(id, e.target.checked)}
+                className="h-4 w-4 accent-[var(--c-accent)]"
+              />
+              <span className="min-w-0 flex-1 truncate font-mono">{id}</span>
+              {pinned.has(id) && <span className="text-xs text-muted">recommended</span>}
+            </label>
+          ))}
+        </div>
       )}
     </div>
   );

@@ -282,6 +282,28 @@ export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: M
   );
 }
 
+// Ready-made templates for the "Start from an example" buttons.
+const EXAMPLES: { name: string; fields: ExtractionField[] }[] = [
+  {
+    name: 'Client status',
+    fields: [
+      { name: 'Status', description: 'one line: where the project stands after this meeting' },
+      { name: 'Next deadline', description: 'the next agreed date and what is due' },
+      { name: 'Blockers', description: 'anything holding things up, or "none"' },
+      { name: 'Client mood', description: 'happy / neutral / concerned, with a short reason' },
+    ],
+  },
+  {
+    name: 'Sales call',
+    fields: [
+      { name: 'Budget', description: 'budget mentioned, with currency and conditions' },
+      { name: 'Decision maker', description: 'who decides and who else is involved' },
+      { name: 'Objections', description: 'concerns the prospect raised' },
+      { name: 'Next step', description: 'the agreed next step and its date' },
+    ],
+  },
+];
+
 function TemplateEditor({
   open,
   template,
@@ -324,20 +346,59 @@ function TemplateEditor({
         </>
       }
     >
-      <div className="space-y-4">
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Template name, e.g. Client status" autoFocus />
-        <div className="space-y-2">
-          <div className="text-[13px] font-medium">Fields</div>
+      <div className="space-y-5">
+        <p className="text-[13px] text-muted">
+          A template is a table the AI fills in for every meeting in this folder: one row per meeting, one column per
+          field. Give each field a name and tell the AI what to write in it.
+        </p>
+        {!template && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted">Start from an example:</span>
+            {EXAMPLES.map((ex) => (
+              <Button
+                key={ex.name}
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setName(ex.name);
+                  setFields(ex.fields);
+                }}
+              >
+                {ex.name}
+              </Button>
+            ))}
+          </div>
+        )}
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-medium">Template name</span>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Client status" autoFocus />
+        </label>
+        <div className="space-y-2.5">
+          <div className="text-[13px] font-medium">Fields (columns)</div>
           {fields.map((f, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <Input value={f.name} onChange={(e) => setField(i, { name: e.target.value })} placeholder="Name, e.g. Budget" className="w-44" />
-              <Input
-                value={f.description}
-                onChange={(e) => setField(i, { description: e.target.value })}
-                placeholder="What to put here, e.g. agreed budget in EUR, with any conditions"
-                className="flex-1"
+            <div key={i} className="flex items-start gap-2 rounded-field border border-line p-3">
+              <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[11rem_minmax(0,1fr)]">
+                <label className="flex min-w-0 flex-col gap-1">
+                  <span className="text-xs text-muted">Field name</span>
+                  <Input value={f.name} onChange={(e) => setField(i, { name: e.target.value })} placeholder="e.g. Budget" />
+                </label>
+                <label className="flex min-w-0 flex-col gap-1">
+                  <span className="text-xs text-muted">What the AI should write</span>
+                  <Input
+                    value={f.description}
+                    onChange={(e) => setField(i, { description: e.target.value })}
+                    placeholder="e.g. the agreed budget in EUR, with any conditions"
+                   
+                  />
+                </label>
+              </div>
+              <IconButton
+                icon={X}
+                label="Remove field"
+                disabled={fields.length === 1}
+                onClick={() => setFields((list) => list.filter((_, j) => j !== i))}
+                className="mt-6"
               />
-              <IconButton icon={X} label="Remove field" onClick={() => setFields((list) => list.filter((_, j) => j !== i))} />
             </div>
           ))}
           <Button size="sm" variant="ghost" icon={Plus} onClick={() => setFields((list) => [...list, { name: '', description: '' }])}>

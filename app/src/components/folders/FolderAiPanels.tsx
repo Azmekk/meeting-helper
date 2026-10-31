@@ -3,10 +3,10 @@
 // opens that meeting at the cited line.
 import { TermsField } from '../TermsField';
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
-import { ArrowUp, MessageSquare, RefreshCw, Search, Sparkles, Square, Trash2 } from 'lucide-react';
+import { ArrowUp, MessageSquare, RefreshCw, Search, Square, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Button, Callout, Card, Modal, Spinner, Textarea, errorMessage, toast } from '../ui';
+import { Button, Callout, Card, Modal, Spinner, Textarea, clsx, errorMessage, toast } from '../ui';
 import { ChatBubble, NoKeyNotice, useAbortable, useAiKey } from '../meeting/AiPanels';
 import { AiMarkdown, type CiteProps } from '../meeting/AiMarkdown';
 import * as db from '../../lib/db';
@@ -369,21 +369,75 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
 
 // ---------- Briefing ----------
 
-// Folder-wide context for every AI request about its meetings; saved on blur.
-export function FolderBriefingCard({ folder }: { folder: Folder }) {
-  const saved = folder.briefing ?? '';
-  const [value, setValue] = useState(saved);
-  const [saving, setSaving] = useState(false);
+// Briefing and vocabulary as two compact rows; each opens a dialog to edit.
+export function FolderContextCard({ folder }: { folder: Folder }) {
+  const [editing, setEditing] = useState<null | 'briefing' | 'terms'>(null);
+  const terms = folder.terms;
+  return (
+    <Card title="Folder context" padded={false}>
+      <div className="divide-y divide-line">
+        <ContextRow
+          title="Briefing"
+          hint="Added to every AI request for meetings in this folder."
+          preview={folder.briefing ?? 'Not set'}
+          empty={!folder.briefing}
+          onEdit={() => setEditing('briefing')}
+        />
+        <ContextRow
+          title="Vocabulary"
+          hint="Names and terms the transcriber should know."
+          preview={terms.length ? terms.join(', ') : 'No terms'}
+          empty={!terms.length}
+          onEdit={() => setEditing('terms')}
+        />
+      </div>
+      <BriefingDialog folder={folder} open={editing === 'briefing'} onClose={() => setEditing(null)} />
+      <TermsDialog folder={folder} open={editing === 'terms'} onClose={() => setEditing(null)} />
+    </Card>
+  );
+}
 
-  useEffect(() => setValue(folder.briefing ?? ''), [folder.id, folder.briefing]);
+function ContextRow({
+  title,
+  hint,
+  preview,
+  empty,
+  onEdit,
+}: {
+  title: string;
+  hint: string;
+  preview: string;
+  empty: boolean;
+  onEdit: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 px-5 py-3.5">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium" title={hint}>
+          {title}
+        </div>
+        <p className={clsx('truncate text-[13px]', empty ? 'text-faint' : 'text-muted')}>{preview}</p>
+      </div>
+      <Button size="sm" variant="secondary" onClick={onEdit}>
+        {empty ? 'Add' : 'Edit'}
+      </Button>
+    </div>
+  );
+}
+
+function BriefingDialog({ folder, open, onClose }: { folder: Folder; open: boolean; onClose: () => void }) {
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (open) setValue(folder.briefing ?? '');
+  }, [open, folder.briefing]);
 
   const save = async () => {
-    const next = value.trim() ? value.trim() : null;
-    if ((next ?? '') === saved.trim()) return;
     setSaving(true);
     try {
-      await db.setFolderBriefing(folder.id, next);
+      await db.setFolderBriefing(folder.id, value.trim() || null);
       await refreshFolders();
+      onClose();
     } catch (err) {
       toast(`Couldn't save the briefing: ${errorMessage(err)}`, 'error');
     } finally {
@@ -392,24 +446,38 @@ export function FolderBriefingCard({ folder }: { folder: Folder }) {
   };
 
   return (
-    <Card
+    <Modal
+      open={open}
+      onClose={onClose}
       title="Folder briefing"
-      description="Who you are and what this series of meetings is about. Added to every AI request for meetings in this folder."
-      actions={saving ? <Spinner size={14} /> : <Sparkles size={14} className="text-faint" />}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" loading={saving} onClick={() => void save()}>
+            Save
+          </Button>
+        </>
+      }
     >
+      <p className="mb-3 text-[13px] text-muted">
+        Who you are and what this series of meetings is about. The AI reads it with every summary, answer and extraction
+        for meetings in this folder.
+      </p>
       <Textarea
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        onBlur={save}
-        rows={3}
-        placeholder="e.g. Weekly syncs with Acme about the website relaunch. I'm the agency's project lead."
+        rows={6}
+        autoFocus
+        placeholder="e.g. Weekly syncs with Acme about the website relaunch. I'm the agency's project lead; Иван is their CFO."
         className="resize-y text-[13px]"
       />
-    </Card>
+    </Modal>
   );
 }
 
-export function FolderTermsCard({ folder }: { folder: Folder }) {
+function TermsDialog({ folder, open, onClose }: { folder: Folder; open: boolean; onClose: () => void }) {
   const save = async (terms: string[]) => {
     try {
       await db.setFolderTerms(folder.id, terms);
@@ -419,11 +487,21 @@ export function FolderTermsCard({ folder }: { folder: Folder }) {
     }
   };
   return (
-    <Card
+    <Modal
+      open={open}
+      onClose={onClose}
       title="Folder vocabulary"
-      description="Names and terms the transcriber should know for every meeting in this folder, added to your default list (Settings → Language)."
+      footer={
+        <Button variant="primary" onClick={onClose}>
+          Done
+        </Button>
+      }
     >
-      <TermsField terms={folder.terms} onSave={save} placeholder={'Client and colleague names, product names…\nOne term per line'} />
-    </Card>
+      <p className="mb-3 text-[13px] text-muted">
+        One term per line: just the name or word, no explanation. Used for every meeting in this folder, on top of your
+        default list in Settings → Language. Saved when you click outside the box.
+      </p>
+      <TermsField terms={folder.terms} onSave={save} rows={8} placeholder={'Client and colleague names, product names…\nOne term per line'} />
+    </Modal>
   );
 }

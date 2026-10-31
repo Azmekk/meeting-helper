@@ -64,7 +64,7 @@ export function PhoneLink({ autoReveal = false }: { autoReveal?: boolean }) {
             <button
               type="button"
               onClick={() => setShowQr(true)}
-              className="flex h-44 w-44 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line text-[13px] text-muted hover:bg-hover"
+              className="flex h-44 w-44 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-line text-[13px] text-muted hover:bg-hover"
             >
               <Eye size={18} />
               Show QR code

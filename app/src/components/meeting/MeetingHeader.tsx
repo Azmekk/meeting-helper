@@ -1,6 +1,5 @@
 import {
   ArrowLeft,
-  Check,
   ChevronDown,
   Download,
   Ellipsis,
@@ -9,6 +8,7 @@ import {
   FolderOpen,
   Languages,
   Pencil,
+  Share2,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -16,9 +16,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EXPORT_FORMATS, type ExportFormat } from '../../lib/export';
 import { formatDate, formatDuration } from '../../lib/format';
-import * as db from '../../lib/db';
-import { emitMeetingChanged, type Job } from '../../lib/pipeline';
-import { useSettings } from '../../lib/settings';
+import type { Job } from '../../lib/pipeline';
 import type { Folder, Meeting, ProviderId, Transcript } from '../../lib/types';
 import { Button, IconButton, Input, Select } from '../ui';
 import {
@@ -44,6 +42,7 @@ export function MeetingHeader({
   onTranscribe,
   onExport,
   onShowInFolder,
+  onShare,
   onDeleteTranscript,
   onDeleteMeeting,
   folders,
@@ -59,6 +58,7 @@ export function MeetingHeader({
   onTranscribe: (provider: ProviderId) => void;
   onExport: (format: ExportFormat) => void;
   onShowInFolder: () => void;
+  onShare: () => void;
   onDeleteTranscript: () => void;
   onDeleteMeeting: () => void;
   folders: Folder[];
@@ -70,12 +70,6 @@ export function MeetingHeader({
   const hasMedia = !!(meeting.mediaPath || meeting.sourcePath);
   const toggle = (m: NonNullable<typeof menu>) => setMenu((cur) => (cur === m ? null : m));
   const close = () => setMenu(null);
-  const splitDefault = useSettings((s) => s.settings.splitTracks);
-  const split = meeting.splitTracks ?? splitDefault;
-  const toggleSplit = async () => {
-    await db.updateMeeting(meeting.id, { splitTracks: !split });
-    emitMeetingChanged(meeting.id);
-  };
 
   const saveTitle = (value: string) => {
     setEditingTitle(false);
@@ -84,17 +78,50 @@ export function MeetingHeader({
   };
 
   return (
-    <header className="pb-6">
+    <header className="pb-5">
       <Link
         to="/meetings"
-        className="mb-3 inline-flex items-center gap-1.5 rounded-md text-[13px] text-muted transition-colors hover:text-text"
+        className="-ml-2 mb-2 inline-flex h-7 items-center gap-1 rounded-full px-2 text-[13px] font-medium text-accent-ink transition-colors hover:bg-accent-soft"
       >
         <ArrowLeft size={14} />
         Meetings
       </Link>
 
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
         <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted">
+            {(folders.length > 0 || meeting.folderId != null) && (
+              <label className="-ml-1 inline-flex items-center gap-1" title="Folder">
+                <FolderIcon size={13} className="text-faint" />
+                <Select
+                  plain
+                  aria-label="Folder"
+                  value={meeting.folderId ?? ''}
+                  disabled={meeting.status === 'recording'}
+                  onChange={(e) => onMoveToFolder(e.target.value ? Number(e.target.value) : null)}
+                  className="max-w-48 rounded-full px-1.5 py-0.5 text-[13px] text-muted hover:bg-hover hover:text-text focus:outline-none"
+                >
+                  <option value="">Unsorted</option>
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            )}
+            {(folders.length > 0 || meeting.folderId != null) && <span className="text-faint">·</span>}
+            <span>{formatDate(meeting.createdAt)}</span>
+            <span className="text-faint">·</span>
+            <span>{formatDuration(meeting.durationMs)}</span>
+            <StatusBadge status={meeting.status} job={job} />
+            {activeTranscript?.languages && (
+              <span className="inline-flex items-center gap-1 text-muted" title="Detected languages">
+                <Languages size={13} />
+                {activeTranscript.languages}
+              </span>
+            )}
+          </div>
           {editingTitle ? (
             <Input
               autoFocus
@@ -105,49 +132,18 @@ export function MeetingHeader({
                 if (e.key === 'Enter') saveTitle(e.currentTarget.value);
                 if (e.key === 'Escape') setEditingTitle(false);
               }}
-              className="h-10 max-w-2xl font-display text-2xl! font-semibold tracking-tight"
+              className="mt-1 h-11 max-w-2xl rounded-field! font-display text-[26px]! font-bold tracking-[-0.02em]"
             />
           ) : (
             <h1
               onClick={() => setEditingTitle(true)}
               title="Click to rename"
-              className="group -mx-1.5 inline-flex max-w-full cursor-text items-center gap-2 rounded-lg px-1.5 font-display text-2xl leading-10 font-semibold tracking-tight hover:bg-hover/60"
+              className="group -mx-2 mt-1 inline-flex max-w-full cursor-text items-center gap-2 rounded-xl px-2 font-display text-[28px] leading-[44px] font-bold tracking-[-0.02em] hover:bg-hover"
             >
               <span className="truncate">{meeting.title || 'Untitled meeting'}</span>
               <Pencil size={15} className="shrink-0 text-faint opacity-0 transition-opacity group-hover:opacity-100" />
             </h1>
           )}
-          <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-muted">
-            <span>{formatDate(meeting.createdAt)}</span>
-            <span className="text-faint">·</span>
-            <span>{formatDuration(meeting.durationMs)}</span>
-            <StatusBadge status={meeting.status} job={job} />
-            {(folders.length > 0 || meeting.folderId != null) && (
-              <label className="inline-flex items-center gap-1" title="Folder">
-                <FolderIcon size={13} className="text-faint" />
-                <select
-                  aria-label="Folder"
-                  value={meeting.folderId ?? ''}
-                  disabled={meeting.status === 'recording'}
-                  onChange={(e) => onMoveToFolder(e.target.value ? Number(e.target.value) : null)}
-                  className="max-w-48 cursor-pointer truncate rounded bg-transparent py-0.5 text-[13px] text-muted hover:bg-hover hover:text-text focus:outline-none disabled:cursor-default"
-                >
-                  <option value="">Unsorted</option>
-                  {folders.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {activeTranscript?.languages && (
-              <span className="inline-flex items-center gap-1 text-faint" title="Detected languages">
-                <Languages size={13} />
-                {activeTranscript.languages}
-              </span>
-            )}
-          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -177,7 +173,7 @@ export function MeetingHeader({
               Transcribe with…
               <ChevronDown size={14} className="-mr-1 opacity-70" />
             </Button>
-            <Popover open={menu === 'transcribe'} onClose={close} className="top-full right-0 mt-1 w-64">
+            <Popover open={menu === 'transcribe'} onClose={close} className="top-full right-0 mt-1.5 w-64">
               <MenuLabel>Adds a new transcript</MenuLabel>
               {PROVIDER_IDS.map((p) => (
                 <MenuItem
@@ -191,11 +187,6 @@ export function MeetingHeader({
                   {PROVIDER_LABEL[p]}
                 </MenuItem>
               ))}
-              <MenuSeparator />
-              {/* Off when someone else was at the desk: their voice is on the mic too. */}
-              <MenuItem icon={split ? Check : undefined} onClick={() => void toggleSplit()}>
-                Transcribe my mic separately
-              </MenuItem>
             </Popover>
           </div>
 
@@ -204,7 +195,7 @@ export function MeetingHeader({
               Export
               <ChevronDown size={14} className="-mr-1 opacity-70" />
             </Button>
-            <Popover open={menu === 'export'} onClose={close} className="top-full right-0 mt-1 w-60">
+            <Popover open={menu === 'export'} onClose={close} className="top-full right-0 mt-1.5 w-60">
               {EXPORT_FORMATS.map((f) => (
                 <MenuItem
                   key={f.id}
@@ -222,8 +213,8 @@ export function MeetingHeader({
           </div>
 
           <div className="relative">
-            <IconButton icon={Ellipsis} label="More" onClick={() => toggle('more')} className="h-9 w-9" />
-            <Popover open={menu === 'more'} onClose={close} className="top-full right-0 mt-1 w-56">
+            <IconButton icon={Ellipsis} label="More" onClick={() => toggle('more')} className="h-9 w-9 bg-fill text-text hover:bg-fill-strong" />
+            <Popover open={menu === 'more'} onClose={close} className="top-full right-0 mt-1.5 w-56">
               <MenuItem
                 icon={FolderOpen}
                 disabled={!hasMedia}
@@ -233,6 +224,16 @@ export function MeetingHeader({
                 }}
               >
                 Show in folder
+              </MenuItem>
+              <MenuItem
+                icon={Share2}
+                disabled={meeting.status === 'recording'}
+                onClick={() => {
+                  close();
+                  onShare();
+                }}
+              >
+                Export meeting for someone…
               </MenuItem>
               <MenuSeparator />
               <MenuItem

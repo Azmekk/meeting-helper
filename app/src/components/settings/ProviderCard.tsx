@@ -5,7 +5,7 @@ import type { SttProvider } from '../../lib/providers/types';
 import { deleteSecret, getSecret, setSecret, type SecretName } from '../../lib/secrets';
 import { useSettings } from '../../lib/settings';
 import type { ProviderId } from '../../lib/types';
-import { Badge, Button, Callout, Card, IconButton, Input, Spinner, clsx, errorMessage, toast } from '../ui';
+import { Badge, Button, Callout, Card, Collapse, IconButton, Input, Spinner, clsx, errorMessage, toast } from '../ui';
 import { ApiKeyGuide } from './ApiKeyGuides';
 import { saveSettings, setKeyStatus } from './common';
 import { KEY_STORE } from '../../lib/platform';
@@ -235,21 +235,19 @@ export function ProviderCard({ id }: { id: ProviderId }) {
           </Callout>
         )}
 
-        <div className="rounded-lg border border-line">
+        <div className="rounded-2xl border border-line">
           <button
             type="button"
             onClick={() => setGuideOpen((o) => !o)}
             aria-expanded={guideOpen}
-            className="flex w-full items-center justify-between gap-2 rounded-lg px-4 py-2.5 text-left text-[13px] font-medium transition-colors hover:bg-hover"
+            className="flex w-full items-center justify-between gap-2 rounded-2xl px-4 py-2.5 text-left text-[13px] font-medium transition-colors hover:bg-hover"
           >
             How to get your {name} API key
-            <ChevronDown size={15} className={clsx('text-muted transition-transform', guideOpen && 'rotate-180')} />
+            <ChevronDown size={15} className={clsx('text-muted transition-transform duration-300', guideOpen && 'rotate-180')} />
           </button>
-          {guideOpen && (
-            <div className="border-t border-line px-4 py-4">
-              <ApiKeyGuide provider={id} />
-            </div>
-          )}
+          <Collapse open={guideOpen} className="border-t border-line px-4 py-4">
+            <ApiKeyGuide provider={id} />
+          </Collapse>
         </div>
       </div>
     </Card>

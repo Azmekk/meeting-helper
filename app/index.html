@@ -5,6 +5,11 @@
     
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Meeting Helper</title>
+    <!-- The window is transparent (for Mica/Acrylic); paint a background until the CSS loads. -->
+    <style>html{background:#f2f2f7}@media (prefers-color-scheme:dark){html{background:#111113}}</style>
+    <!-- The live overlay window is a transparent, frameless pill: no page background, always dark. -->
+    <script>if(location.hash.indexOf('#/overlay')===0){document.documentElement.classList.add('overlay');document.documentElement.dataset.theme='dark';}</script>
+    <style>html.overlay{background:transparent!important}</style>
   </head>
 
   <body>

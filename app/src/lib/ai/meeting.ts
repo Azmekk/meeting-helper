@@ -1,5 +1,6 @@
 // Meeting-level AI: the Markdown summary and transcript chat. Both send the
 // whole active transcript as the cacheable context block.
+import { create } from 'zustand';
 import * as db from '../db';
 import { formatDate } from '../format';
 import { getSecret } from '../secrets';
@@ -11,6 +12,7 @@ import { CITATION_RULES, formatTranscript, languageInstruction, toPromptLines } 
 export interface MeetingAiOptions {
   signal?: AbortSignal;
   onText?: (text: string) => void; // everything streamed so far
+  model?: string; // instead of the summary model setting, for this call only
 }
 
 // Largest context any supported model takes is ~1M tokens; past that the call
@@ -109,6 +111,7 @@ export async function summarizeMeeting(meetingId: number, opts: MeetingAiOptions
       context: contextBlock(ctx),
       messages: [{ role: 'user', content: 'Summarise this meeting.' }],
       maxTokens: 16000,
+      model: opts.model || undefined,
       signal: opts.signal,
     },
     { onText: (_delta, text) => opts.onText?.(text) },
@@ -125,6 +128,53 @@ export async function summarizeMeeting(meetingId: number, opts: MeetingAiOptions
   });
   for (const fn of summaryListeners) fn(meetingId);
   return doc;
+}
+
+// Summary runs live here, not in the Summary tab, so switching tabs or pages
+// doesn't cancel a run that's already being paid for, and coming back shows
+// its progress. One run per meeting; Stop is the only way to cancel.
+export interface SummaryJob {
+  text: string; // streamed so far
+  model: string | null;
+  error: string | null; // set when the run failed; cleared by the next run
+  running: boolean;
+}
+
+export const useSummaryJobs = create<Record<number, SummaryJob>>(() => ({}));
+const summaryAborts = new Map<number, AbortController>();
+
+function setJob(meetingId: number, patch: Partial<SummaryJob>) {
+  useSummaryJobs.setState((s) => ({
+    [meetingId]: { ...(s[meetingId] ?? { text: '', model: null, error: null, running: false }), ...patch },
+  }));
+}
+
+// Starts a summary unless one is already running for this meeting. Resolves
+// with the saved doc, or null if it failed or was stopped (the error is in the job).
+export async function startSummary(meetingId: number, opts: { model?: string } = {}): Promise<AiDoc | null> {
+  if (summaryAborts.has(meetingId)) return null;
+  const ctrl = new AbortController();
+  summaryAborts.set(meetingId, ctrl);
+  setJob(meetingId, { text: '', model: opts.model || null, error: null, running: true });
+  try {
+    const doc = await summarizeMeeting(meetingId, {
+      model: opts.model,
+      signal: ctrl.signal,
+      onText: (text) => setJob(meetingId, { text }),
+    });
+    setJob(meetingId, { running: false, text: '' });
+    return doc;
+  } catch (err) {
+    const aborted = ctrl.signal.aborted || isAbortError(err);
+    setJob(meetingId, { running: false, text: '', error: aborted ? null : err instanceof Error ? err.message : String(err) });
+    return null;
+  } finally {
+    summaryAborts.delete(meetingId);
+  }
+}
+
+export function stopSummary(meetingId: number): void {
+  summaryAborts.get(meetingId)?.abort();
 }
 
 // Folder AI listens here to fold new summaries into the folder (folder.ts).

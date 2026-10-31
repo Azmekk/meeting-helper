@@ -40,6 +40,16 @@ export function RecordingSection() {
             />
           </SettingRow>
           <SettingRow
+            title="Noise suppression on my microphone"
+            description="Adds OBS's Noise Suppression filter (RNNoise) to the microphone you record with, if it has no noise filter yet. A filter belongs to the mic, so it applies in every OBS scene that uses it. Turning this off doesn't remove a filter."
+          >
+            <Switch
+              label="Noise suppression on my microphone"
+              checked={s.micNoiseSuppression}
+              onChange={(v) => saveSettings({ micNoiseSuppression: v })}
+            />
+          </SettingRow>
+          <SettingRow
             title="Transcribe automatically"
             description="Start transcribing as soon as a recording stops or a file is imported."
           >

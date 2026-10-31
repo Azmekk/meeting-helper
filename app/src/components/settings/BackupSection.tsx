@@ -5,12 +5,14 @@ import { CloudDownload, CloudUpload, Download, FileArchive, FlaskConical, Folder
 import { useEffect, useState, type ReactNode } from 'react';
 import { Badge, Button, Callout, Card, Field, Input, Modal, SettingRow, Spinner, Switch, clsx, errorMessage, toast } from '../ui';
 import { CommitInput, saveSettings } from './common';
+import { ImportMeetingModal } from '../meeting/ShareMeeting';
 import {
   backupNow,
   downloadAllMedia,
   exportZip,
   formatBytes,
   importZip,
+  inspectZip,
   listRemote,
   loadS3Config,
   remotePrefix,
@@ -18,6 +20,7 @@ import {
   useBackup,
   type BackupResult,
   type RemoteListing,
+  type SingleMeetingZip,
   type ZipSelection,
 } from '../../lib/backup';
 import * as db from '../../lib/db';
@@ -105,6 +108,7 @@ export function BackupSection() {
   const [lastResult, setLastResult] = useState<BackupResult | null>(null);
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [pendingZip, setPendingZip] = useState<SingleMeetingZip | null>(null);
   const [message, setMessage] = useState<{ tone: 'success' | 'warn' | 'error'; title: string; body?: ReactNode } | null>(null);
 
   // Another bucket or prefix means nothing there is backed up yet.
@@ -165,6 +169,12 @@ export function BackupSection() {
     if (!picked || typeof picked !== 'string') return;
     setMessage(null);
     try {
+      // One meeting (e.g. shared by someone): ask for speaker names and a folder first.
+      const single = await inspectZip(picked);
+      if (single) {
+        setPendingZip(single);
+        return;
+      }
       const res = await importZip(picked);
       setMessage({
         tone: res.failed.length ? 'warn' : 'success',
@@ -281,6 +291,14 @@ export function BackupSection() {
 
       <RestoreModal open={restoreOpen} onClose={() => setRestoreOpen(false)} onDone={setMessage} />
       <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} onDone={setMessage} />
+      <ImportMeetingModal
+        pending={pendingZip}
+        onClose={() => setPendingZip(null)}
+        onImported={(_id, res) => {
+          setPendingZip(null);
+          setMessage({ tone: 'success', title: res.updated ? 'Meeting updated' : 'Meeting imported', body: pendingZip?.bundle.meeting.title });
+        }}
+      />
     </>
   );
 }

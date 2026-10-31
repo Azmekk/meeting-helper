@@ -91,7 +91,7 @@ export function SecretSection() {
           </p>
           {hotkeyError && <Callout tone="error">{hotkeyError}</Callout>}
 
-          <div className="rounded-lg border border-line p-4">
+          <div className="rounded-2xl border border-line p-4">
             <div className="flex flex-wrap items-center gap-2">
               <Smartphone size={16} className="text-muted" />
               <span className="flex-1 text-sm font-medium">
@@ -131,7 +131,7 @@ export function SecretSection() {
                   <button
                     type="button"
                     onClick={() => setShowQr(true)}
-                    className="flex h-44 w-44 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line text-[13px] text-muted hover:bg-hover"
+                    className="flex h-44 w-44 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-line text-[13px] text-muted hover:bg-hover"
                   >
                     <Eye size={18} />
                     Show QR code

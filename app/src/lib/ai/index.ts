@@ -25,6 +25,60 @@ export function sortModels(provider: AiProvider, ids: string[]): { recommended: 
   return { recommended, rest };
 }
 
+// The newest model of each family: claude-opus-5-5 hides claude-opus-4-8, and
+// an alias hides its dated snapshots (claude-haiku-4-5-20251001). A family is
+// the id without its version numbers (claude-opus, gpt-sol, deepseek-pro).
+const DATE_SUFFIX = /-(\d{8}|\d{4}-\d{2}-\d{2})$/;
+
+function parseModelId(id: string): { family: string; version: number[]; date: string } {
+  const date = DATE_SUFFIX.exec(id)?.[1] ?? '';
+  const family: string[] = [];
+  const version: number[] = [];
+  for (const part of id.replace(DATE_SUFFIX, '').split(/[-_]/)) {
+    const m = /^v?(\d+(?:\.\d+)*)$/i.exec(part);
+    if (m) version.push(...m[1].split('.').map(Number));
+    else family.push(part.toLowerCase());
+  }
+  return { family: family.join('-'), version, date };
+}
+
+function compareVersions(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+export function latestModels(ids: string[]): string[] {
+  const best = new Map<string, { id: string; version: number[]; date: string }>();
+  for (const id of ids) {
+    const p = parseModelId(id);
+    const cur = best.get(p.family);
+    const newer =
+      !cur ||
+      compareVersions(p.version, cur.version) > 0 ||
+      (compareVersions(p.version, cur.version) === 0 && (!p.date ? !!cur.date : !!cur.date && p.date > cur.date));
+    if (newer) best.set(p.family, { id, ...p });
+  }
+  const keep = new Set([...best.values()].map((b) => b.id));
+  return ids.filter((id) => keep.has(id));
+}
+
+// The models the pickers offer, per Settings → AI → "Models in lists", in
+// sortModels order. The recommended models are always offered.
+export function pickerModels(provider: AiProvider, ids: string[], settings: Settings = getSettings()) {
+  const { default: d, budget, others } = provider.recommendedModels;
+  const pinned = new Set([d, budget, ...others].filter(Boolean));
+  const shown =
+    settings.aiModelList === 'all'
+      ? ids
+      : settings.aiModelList === 'custom'
+        ? ids.filter((id) => pinned.has(id) || settings.aiCustomModels.includes(id))
+        : ids.filter((id) => pinned.has(id) || latestModels(ids).includes(id));
+  return sortModels(provider, shown);
+}
+
 // Live calls must be quick; summaries can think longer.
 const TASK_EFFORT: Record<AiTask, AiEffort> = { live: 'fast', answer: 'normal', summary: 'deep' };
 

@@ -103,7 +103,7 @@ export default function SearchScreen() {
   const total = results?.hits.length ?? 0;
 
   return (
-    <div className="mx-auto max-w-4xl px-8 py-8">
+    <div className="mx-auto max-w-7xl px-8 py-8">
       <PageHeader title="Search" description="Find anything that was said, in every meeting." />
 
       <div className="relative">
@@ -123,9 +123,9 @@ export default function SearchScreen() {
           placeholder="Search transcripts…"
           spellCheck={false}
           className={clsx(
-            'h-12 w-full rounded-xl border border-line bg-panel pr-12 pl-11 text-[15px] text-text shadow-sm',
-            'placeholder:text-faint transition-colors hover:border-faint',
-            'focus:border-accent focus:ring-2 focus:ring-accent-soft focus:outline-none',
+            'surface h-12 w-full rounded-full border border-transparent pr-12 pl-11 text-[15px] text-text',
+            'placeholder:text-faint transition-[border-color,box-shadow]',
+            'focus:border-accent focus:ring-[3px] focus:ring-accent/20 focus:outline-none',
             '[&::-webkit-search-cancel-button]:hidden',
           )}
         />
@@ -179,7 +179,7 @@ export default function SearchScreen() {
 function MeetingResults({ group, terms }: { group: MeetingGroup; terms: string[] }) {
   const navigate = useNavigate();
   return (
-    <section className="overflow-hidden rounded-xl border border-line bg-panel shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+    <section className="surface overflow-hidden rounded-card">
       <button
         type="button"
         onClick={() => navigate(`/meetings/${group.meetingId}`)}
@@ -205,7 +205,7 @@ function MeetingResults({ group, terms }: { group: MeetingGroup; terms: string[]
               onClick={() => navigate(`/meetings/${h.meetingId}?t=${h.startMs}&seg=${h.segmentId}`)}
               className="flex w-full gap-4 px-5 py-3 text-left transition-colors hover:bg-hover/50 focus-visible:bg-hover/50"
             >
-              <span className="mt-0.5 h-fit shrink-0 rounded-md bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-muted tabular-nums">
+              <span className="mt-0.5 h-fit shrink-0 rounded-full bg-fill px-2 py-0.5 font-mono text-[12px] text-muted tabular-nums">
                 {formatTimestamp(h.startMs)}
               </span>
               <div className="min-w-0 flex-1">
@@ -243,7 +243,7 @@ const EXAMPLES = ['среща', 'проект', 'deploy', '"next sprint"'];
 
 function SearchTips({ onExample }: { onExample: (q: string) => void }) {
   return (
-    <div className="rounded-xl border border-line bg-panel px-6 py-5">
+    <div className="surface rounded-card px-6 py-5">
       <div className="text-sm font-medium">Search tips</div>
       <ul className="mt-3 space-y-2 text-[13px] leading-relaxed text-muted">
         <li>
@@ -268,7 +268,7 @@ function SearchTips({ onExample }: { onExample: (q: string) => void }) {
             key={q}
             type="button"
             onClick={() => onExample(q)}
-            className="rounded-full border border-line bg-sunken px-2.5 py-0.5 text-xs text-muted transition-colors hover:border-faint hover:text-text"
+            className="rounded-full bg-fill px-3 py-1 text-xs text-text/80 transition-colors hover:bg-fill-strong hover:text-text"
           >
             {q}
           </button>

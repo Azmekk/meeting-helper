@@ -3,7 +3,7 @@ import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import { formatUsd } from '../../lib/format';
 import type { Job } from '../../lib/pipeline';
 import type { MeetingStatus, ProviderId, Transcript } from '../../lib/types';
-import { Badge, Spinner, clsx } from '../ui';
+import { Badge, Spinner, clsx, usePresence } from '../ui';
 
 export const PROVIDER_LABEL: Record<ProviderId, string> = {
   soniox: 'Soniox',
@@ -57,11 +57,38 @@ export function speakerColor(index: number): string {
   return `light-dark(hsl(${hue} 58% 36%), hsl(${hue} 62% 72%))`;
 }
 
+// Text is pulled toward the theme's text color so even the lighter hues
+// (yellow, cyan) clear 4.5:1 on their own tint.
 export function speakerChipStyle(color: string): CSSProperties {
   return {
-    color,
-    backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`,
+    color: `color-mix(in srgb, ${color} 72%, var(--c-text))`,
+    backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)`,
   };
+}
+
+// "Иван Петров" -> "ИП", "Speaker 2" -> "S2".
+export function speakerInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '?';
+  const first = [...words[0]][0] ?? '?';
+  const second = words.length > 1 ? (/^\d+$/.test(words[1]) ? words[1] : [...words[1]][0]) : '';
+  return (first + second).toUpperCase();
+}
+
+// Round initials avatar in the speaker's color.
+export function SpeakerAvatar({ name, color, className }: { name: string; color: string; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={clsx(
+        'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11.5px] font-bold tracking-tight',
+        className,
+      )}
+      style={speakerChipStyle(color)}
+    >
+      {speakerInitials(name)}
+    </span>
+  );
 }
 
 export function SpeakerDot({ color, className }: { color: string; className?: string }) {
@@ -120,6 +147,10 @@ export function Popover({
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Fades out before unmounting, still showing what it showed while open.
+  const { mounted, closing } = usePresence(open);
+  const last = useRef(children);
+  if (open) last.current = children;
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -143,16 +174,22 @@ export function Popover({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!mounted) return null;
+  // Grow from the corner nearest the trigger.
+  const up = /\bbottom-full\b/.test(className ?? '');
+  const side = /(^|\s)left-/.test(className ?? '') ? 'left' : 'right';
   return (
     <div
       ref={ref}
+      data-motion={up ? 'rise' : 'drop'}
+      data-state={closing ? 'closed' : 'open'}
+      style={{ transformOrigin: `${up ? 'bottom' : 'top'} ${side}` }}
       className={clsx(
-        'absolute z-40 min-w-48 rounded-lg border border-line bg-panel p-1 shadow-xl',
+        'surface-pop absolute z-40 min-w-48 rounded-2xl border border-line p-1.5',
         className,
       )}
     >
-      {children}
+      {open ? children : last.current}
     </div>
   );
 }
@@ -180,7 +217,7 @@ export function MenuItem({
       disabled={disabled}
       onClick={onClick}
       className={clsx(
-        'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors',
+        'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-[7px] text-left text-[13.5px] transition-colors',
         'disabled:pointer-events-none disabled:opacity-50',
         danger ? 'text-danger hover:bg-danger-soft' : 'text-text hover:bg-hover',
         active && 'bg-hover',
@@ -194,9 +231,9 @@ export function MenuItem({
 }
 
 export function MenuLabel({ children }: { children: ReactNode }) {
-  return <div className="px-2.5 pt-1.5 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase">{children}</div>;
+  return <div className="px-2.5 pt-1.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-muted uppercase">{children}</div>;
 }
 
 export function MenuSeparator() {
-  return <div className="my-1 h-px bg-line" />;
+  return <div className="mx-2.5 my-1 h-px bg-line" />;
 }

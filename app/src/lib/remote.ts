@@ -15,9 +15,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { register, unregister } from '@tauri-apps/plugin-global-shortcut';
 import { create } from 'zustand';
 import { errorMessage } from '../components/ui';
-import type { FromPhone, ToPhone } from '../remote/protocol';
+import { diffSnapshot, type FromPhone, type ToPhone } from '../remote/protocol';
 import { isHidden, setHiddenFlag } from './hidden';
-import { OVERLAY_LABEL, getLiveSnapshot, helpMeAnswer, setLiveModel, useLive } from './live';
+import { OVERLAY_LABEL, getLiveSnapshot, helpMeAnswer, setLiveModel, useLive, type LiveSnapshot } from './live';
 import { getSecret, setSecret } from './secrets';
 import { getSettings, useSettings } from './settings';
 
@@ -134,14 +134,38 @@ let lastPush = 0;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let lastAnswerKey = '';
 
-function pushNow() {
+// Phones get a full state after a hello (or a new meeting), then deltas
+// against the last message sent (see protocol.ts). All phones get the same
+// frames, so one baseline serves them all.
+let seq = 0;
+let lastSent: { snap: LiveSnapshot; hidden: boolean; canHide: boolean } | null = null;
+
+function broadcast(msg: ToPhone) {
+  void invoke('remote_broadcast', { payload: JSON.stringify(msg) }).catch(() => {});
+}
+
+function pushNow(full = false) {
   if (pushTimer) clearTimeout(pushTimer);
   pushTimer = null;
   const { status } = get();
-  if (!status.running || !status.clients) return;
+  if (!status.running || !status.clients) {
+    lastSent = null;
+    return;
+  }
   lastPush = Date.now();
-  const msg: ToPhone = { type: 'state', snap: getLiveSnapshot(), hidden: isHidden(), canHide: canHide() };
-  void invoke('remote_broadcast', { payload: JSON.stringify(msg) }).catch(() => {});
+  const snap = getLiveSnapshot();
+  const hidden = isHidden();
+  const hide = canHide();
+  const delta = !full && lastSent ? diffSnapshot(lastSent.snap, snap) : null;
+  if (delta) {
+    const unchanged =
+      delta.fromLine === snap.lineCount && !Object.keys(delta.patch).length && hidden === lastSent!.hidden && hide === lastSent!.canHide;
+    if (unchanged) return;
+    broadcast({ type: 'delta', seq: ++seq, ...delta, hidden, canHide: hide });
+  } else {
+    broadcast({ type: 'state', seq: ++seq, snap, hidden, canHide: hide });
+  }
+  lastSent = { snap, hidden, canHide: hide };
 }
 
 // Driven by store changes rather than a timer loop, because a hidden window's
@@ -164,7 +188,7 @@ function schedulePush() {
 function onPhoneMessage(msg: FromPhone) {
   switch (msg?.type) {
     case 'hello':
-      pushNow();
+      pushNow(true);
       break;
     case 'help':
       void helpMeAnswer();
@@ -270,7 +294,7 @@ export function initRemote(): void {
   void listen<FromPhone>('remote://message', (e) => onPhoneMessage(e.payload));
   void listen<number>('remote://clients', (e) => {
     set((s) => ({ status: { ...s.status, clients: e.payload } }));
-    pushNow();
+    pushNow(true);
   });
   void listen('remote://phone-link-request', () => void enablePhone().then(sendPhoneLink));
   useRemote.subscribe((s, prev) => {

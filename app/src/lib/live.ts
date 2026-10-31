@@ -12,6 +12,8 @@
 //   live://help       {}                                  → help me answer
 //   live://ask        { question: string }                → typed question
 //   live://set-model  { task: 'live'|'answer', model: string, makeDefault?: boolean }
+// And one the other way: overlay://close {} asks the overlay to fade out and
+// close itself (toggleOverlay force-closes it after 400 ms if it doesn't).
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -26,12 +28,12 @@ import {
   getAiProvider,
   roughTokens,
   runAi,
-  sortModels,
+  pickerModels,
 } from './ai';
 import { briefingText, hasAiKey } from './ai/meeting';
 import { formatTranscript, languageInstruction, type PromptLine } from './ai/prompts';
 import * as db from './db';
-import { setRecordingStopHook, useRecorder } from './obs';
+import { offerProcessing, setMicMuted, setRecordingStopHook, useRecorder } from './obs';
 import { emitMeetingChanged } from './pipeline';
 import { getSecret } from './secrets';
 import { meetingTerms } from './terms';
@@ -85,11 +87,6 @@ export interface LiveAnswer {
   model: string;
 }
 
-export interface AfterStop {
-  meetingId: number;
-  durationMs: number;
-}
-
 // What the overlay and the phone remote get. Keep it JSON-serializable.
 export interface LiveSnapshot {
   active: boolean;
@@ -105,6 +102,9 @@ export interface LiveSnapshot {
   answer: LiveAnswer | null;
   models: Record<LiveAiTask, string>;
   modelOptions: string[];
+  outputLanguage: string; // Settings.aiOutputLanguage: 'meeting' or a language code
+  micMuted: boolean | null; // the OBS mic source; null when unknown (not connected)
+  overlaySolid: boolean; // Settings → Appearance → Overlay background
   answerCostEstimate: number | null; // USD for the next answer; null = unknown model
   notesContext: 'notes' | 'full';
   notesCostEstimate: number | null; // USD per notes update
@@ -129,7 +129,6 @@ interface LiveState {
   aiCostUsd: number;
   hotkeyError: string | null;
   overlayOpen: boolean;
-  afterStop: AfterStop | null;
 }
 
 const INITIAL: LiveState = {
@@ -149,7 +148,6 @@ const INITIAL: LiveState = {
   aiCostUsd: 0,
   hotkeyError: null,
   overlayOpen: false,
-  afterStop: null,
 };
 
 export const useLive = create<LiveState>(() => ({ ...INITIAL }));
@@ -227,7 +225,7 @@ function resetMeeting(meetingId: number) {
   lastNotesAt = 0;
   answerAbort?.abort();
   answerAbort = null;
-  set({ ...INITIAL, meetingId, overlayOpen: get().overlayOpen, afterStop: get().afterStop });
+  set({ ...INITIAL, meetingId, overlayOpen: get().overlayOpen });
 }
 
 // ---------- Tokens → lines ----------
@@ -387,7 +385,7 @@ async function doStartLive(): Promise<void> {
   const path = rec.recordingPath;
   if (s.active || s.starting || stopping || !rec.recording || meetingId == null || !path) return;
   if (s.meetingId !== meetingId) resetMeeting(meetingId);
-  set({ starting: true, error: null, afterStop: null });
+  set({ starting: true, error: null });
 
   try {
     if (!/\.mkv$/i.test(path)) throw new Error('Live transcription needs OBS to record MKV files. Change the container on the Record screen.');
@@ -465,7 +463,8 @@ async function onRecordingStopped(meetingId: number | null): Promise<void> {
   const s = get();
   if (meetingId == null || s.meetingId !== meetingId || transcriptId == null) return;
   const durationMs = Math.max(0, ...s.lines.map((l) => l.endMs));
-  set({ afterStop: { meetingId, durationMs } });
+  // Asked right away; the dialog waits for the import to finish.
+  offerProcessing({ meetingId, durationMs, live: true });
   // A last notes pass covers the final minute, then the notes are kept with the meeting.
   void refreshNotes()
     .catch(() => {})
@@ -476,6 +475,8 @@ async function saveNotes(meetingId: number) {
   const notes = get().notes.trim();
   if (!notes || get().meetingId !== meetingId) return;
   try {
+    // "Delete recording" may have removed the meeting meanwhile.
+    if (!(await db.getMeeting(meetingId))) return;
     await db.saveAiDoc({
       scope: 'meeting',
       ownerId: meetingId,
@@ -488,10 +489,6 @@ async function saveNotes(meetingId: number) {
   } catch (err) {
     console.warn('Could not save live notes', err);
   }
-}
-
-export function dismissAfterStop(): void {
-  set({ afterStop: null });
 }
 
 // The switch on the Record screen and in Settings.
@@ -709,7 +706,7 @@ export async function loadModelOptions(): Promise<void> {
   const fallback = [d, budget, ...others].filter(Boolean);
   try {
     const ids = await provider.listModels(await getAiAuth(provider.id, settings));
-    const { recommended, rest } = sortModels(provider, ids);
+    const { recommended, rest } = pickerModels(provider, ids, settings);
     set({ modelOptions: ids.length ? [...recommended, ...rest] : fallback });
   } catch {
     set({ modelOptions: fallback });
@@ -743,14 +740,24 @@ async function unregisterHotkey() {
 // ---------- Overlay window ----------
 
 export const OVERLAY_LABEL = 'overlay';
+// Main → overlay: animate out, then close the window (see OverlayScreen).
+export const OVERLAY_CLOSE_EVENT = 'overlay://close';
+const OVERLAY_WIDTH = 480; // logical px, incl. the transparent margin around the pill
 
 export async function toggleOverlay(show?: boolean): Promise<void> {
   try {
     const existing = await WebviewWindow.getByLabel(OVERLAY_LABEL);
     if (existing) {
       if (show !== true) {
-        await existing.close();
+        // Ask the overlay to fade out and close itself; force-close it if it
+        // doesn't (an old build, a hung page).
         set({ overlayOpen: false });
+        await emit(OVERLAY_CLOSE_EVENT, {}).catch(() => {});
+        setTimeout(() => {
+          void WebviewWindow.getByLabel(OVERLAY_LABEL)
+            .then((w) => w?.close())
+            .catch(() => {});
+        }, 400);
       }
       return;
     }
@@ -758,13 +765,15 @@ export async function toggleOverlay(show?: boolean): Promise<void> {
     const win = new WebviewWindow(OVERLAY_LABEL, {
       url: 'index.html#/overlay',
       title: 'Meeting Helper · Live',
-      width: 380,
-      height: 520,
-      minWidth: 260,
-      minHeight: 180,
+      // A transparent, frameless window holding the floating pill; the page
+      // resizes it to fit its content (OverlayScreen).
+      width: OVERLAY_WIDTH,
+      height: 84,
       alwaysOnTop: true,
       decorations: false,
-      resizable: true,
+      transparent: true,
+      shadow: false,
+      resizable: false,
       focus: false,
       contentProtected: getSettings().overlayContentProtected,
     });
@@ -804,6 +813,9 @@ export function getLiveSnapshot(): LiveSnapshot {
     answer: s.answer,
     models,
     modelOptions: s.modelOptions,
+    outputLanguage: getSettings().aiOutputLanguage || 'meeting',
+    micMuted: useRecorder.getState().setup?.micMuted ?? null,
+    overlaySolid: getSettings().overlaySolid,
     answerCostEstimate: answerCostEstimate(models.answer),
     notesContext: getSettings().liveNotesContext,
     notesCostEstimate: notesCostEstimate(models.live),
@@ -836,23 +848,42 @@ export function initLive(): void {
   initialized = true;
   setRecordingStopHook(onRecordingStopped);
   useRecorder.subscribe(maybeAutoStart);
+  useRecorder.subscribe((s, prev) => {
+    if (s.setup?.micMuted !== prev.setup?.micMuted) scheduleBroadcast();
+  });
   useSettings.subscribe((s, prev) => {
     if (s.settings.liveEnabled !== prev.settings.liveEnabled) maybeAutoStart();
     if (s.settings.liveHotkey !== prev.settings.liveHotkey && get().active) void registerHotkey();
     if (s.settings.aiProvider !== prev.settings.aiProvider) {
       set({ overrides: {}, modelOptions: [] });
-      if (get().active) void loadModelOptions();
+      void loadModelOptions();
+    }
+    else if (s.settings.aiModelList !== prev.settings.aiModelList || s.settings.aiCustomModels !== prev.settings.aiCustomModels) {
+      void loadModelOptions();
     }
     scheduleBroadcast();
   });
   useLive.subscribe(scheduleBroadcast);
 
-  void listen('live://hello', broadcastNow);
+  // The overlay and phone show model pickers before any recording starts.
+  // Reload on every open so they follow the current provider and list setting.
+  void listen('live://hello', () => {
+    void loadModelOptions();
+    broadcastNow();
+  });
   void listen('live://help', () => void helpMeAnswer());
   void listen<{ question?: string }>('live://ask', (e) => void helpMeAnswer(e.payload?.question ?? ''));
+  void listen<{ muted?: boolean }>('live://set-mute', (e) => {
+    void setMicMuted(!!e.payload?.muted).catch((err) => console.warn('Could not change the mic mute', err));
+  });
+  // The overlay can't write settings itself.
+  void listen<{ language?: string }>('live://set-language', (e) => {
+    if (e.payload?.language) void useSettings.getState().update({ aiOutputLanguage: e.payload.language });
+  });
   void listen<{ task?: LiveAiTask; model?: string; makeDefault?: boolean }>('live://set-model', (e) => {
     const { task, model, makeDefault } = e.payload ?? {};
     if (task === 'live' || task === 'answer') void setLiveModel(task, model ?? '', !!makeDefault);
   });
   maybeAutoStart();
+  void loadModelOptions();
 }

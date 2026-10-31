@@ -4,6 +4,8 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
   AudioLines,
   CheckSquare,
+  List,
+  SlidersHorizontal,
   Folder as FolderIcon,
   FolderOpen,
   FolderPlus,
@@ -19,7 +21,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ExtractPanel } from '../components/folders/ExtractPanel';
-import { FolderBriefingCard, FolderChatPanel, FolderSummaryPanel, FolderTermsCard } from '../components/folders/FolderAiPanels';
+import { FolderChatPanel, FolderContextCard, FolderSummaryPanel } from '../components/folders/FolderAiPanels';
 import { ProgressPanel } from '../components/folders/ProgressPanel';
 import { pickAndImportRecording } from '../components/meeting/actions';
 import { StatusBadge, isAudioPath } from '../components/meeting/shared';
@@ -32,12 +34,14 @@ import {
   Input,
   Modal,
   PageHeader,
+  Segmented,
   Spinner,
   clsx,
   errorMessage,
   toast,
 } from '../components/ui';
 import * as db from '../lib/db';
+import { fillSampleFolderData } from '../lib/sampleData';
 import { useFolderAi } from '../lib/ai/folder';
 import { createFolderWithDir, deleteFolderKeepMeetings, folderDirPath, refreshFolders, renameFolderWithDir, useFolders } from '../lib/folders';
 import { formatDate, formatDuration } from '../lib/format';
@@ -45,13 +49,15 @@ import { onMeetingChanged, useJobs } from '../lib/pipeline';
 import { useSettings } from '../lib/settings';
 import type { Folder, Meeting } from '../lib/types';
 
-type Tab = 'summary' | 'progress' | 'chat' | 'extract';
+type Tab = 'meetings' | 'summary' | 'progress' | 'chat' | 'extract' | 'context';
 
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
+  { id: 'meetings', label: 'Meetings', icon: List },
   { id: 'summary', label: 'Summary', icon: Sparkles },
   { id: 'progress', label: 'Progress', icon: CheckSquare },
   { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'extract', label: 'Extract', icon: Table2 },
+  { id: 'context', label: 'Context', icon: SlidersHorizontal },
 ];
 
 export default function FoldersScreen() {
@@ -108,8 +114,10 @@ export default function FoldersScreen() {
         }
       />
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <aside className="space-y-1 lg:sticky lg:top-6 lg:self-start">
+      {/* Sized by the space the screen actually has (the app sidebar takes some). */}
+      <div className="@container">
+      <div className="grid grid-cols-1 gap-8 @min-[46rem]:grid-cols-[220px_minmax(0,1fr)]">
+        <aside className="space-y-1 @min-[46rem]:sticky @min-[46rem]:top-6 @min-[46rem]:self-start">
           {creating && <NameInput initial="" placeholder="Folder name" onDone={create} />}
           {!loaded ? (
             <div className="flex justify-center py-6">
@@ -121,8 +129,8 @@ export default function FoldersScreen() {
                 key={f.id}
                 to={`/folders/${f.id}`}
                 className={clsx(
-                  'flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors',
-                  f.id === folderId ? 'bg-panel font-medium text-text shadow-sm' : 'text-muted hover:bg-hover hover:text-text',
+                  'flex h-9 items-center gap-2.5 rounded-[10px] px-3 text-[14px] transition-colors',
+                  f.id === folderId ? 'bg-accent-soft font-semibold text-accent-ink' : 'text-text/80 hover:bg-hover hover:text-text',
                 )}
               >
                 <FolderIcon size={15} className="shrink-0" />
@@ -155,6 +163,7 @@ export default function FoldersScreen() {
           )}
         </section>
       </div>
+      </div>
     </div>
   );
 }
@@ -180,7 +189,7 @@ function FolderDetail({ folder, onDeleted }: { folder: Folder; onDeleted: () => 
   const navigate = useNavigate();
   const hasBase = useSettings((s) => !!s.settings.baseFolder);
   const [meetings, setMeetings] = useState<Meeting[] | null>(null);
-  const [tab, setTab] = useState<Tab>('summary');
+  const [tab, setTab] = useState<Tab>('meetings');
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -247,7 +256,7 @@ function FolderDetail({ folder, onDeleted }: { folder: Folder; onDeleted: () => 
   };
 
   return (
-    <div>
+    <div className="@container">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         {renaming ? (
           <div className="max-w-md flex-1">
@@ -265,6 +274,20 @@ function FolderDetail({ folder, onDeleted }: { folder: Folder; onDeleted: () => 
         )}
         <div className="flex items-center gap-2">
           {hasBase && <IconButton icon={FolderOpen} label="Show in Explorer" onClick={showDir} className="h-9 w-9" />}
+          {import.meta.env.DEV && (
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Development builds only: fills Progress and Extract with made-up data"
+              onClick={() =>
+                void fillSampleFolderData(folder.id, meetings ?? [])
+                  .then(() => window.location.reload())
+                  .catch((err) => toast(errorMessage(err), 'error'))
+              }
+            >
+              Sample data
+            </Button>
+          )}
           <IconButton icon={Trash2} label="Delete folder" onClick={() => setConfirmDelete(true)} className="h-9 w-9 hover:text-danger" />
           <Button variant="primary" icon={Upload} loading={!!importing} onClick={importRecording}>
             {importing ?? 'Import recording'}
@@ -272,68 +295,59 @@ function FolderDetail({ folder, onDeleted }: { folder: Folder; onDeleted: () => 
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
-        <aside className="space-y-5">
-          <Card title="Meetings" description={meetings ? `${meetings.length} in this folder` : undefined} padded={false}>
-            {meetings === null ? (
-              <div className="flex justify-center py-6">
-                <Spinner />
-              </div>
-            ) : meetings.length ? (
-              <ul className="divide-y divide-line">
-                {[...meetings].reverse().map((m) => (
-                  <FolderMeetingRow key={m.id} meeting={m} />
-                ))}
-              </ul>
-            ) : (
-              <p className="px-5 py-6 text-center text-[13px] text-muted">
-                No meetings yet. Import a recording here, record into this folder, or move meetings in from the Meetings list.
-              </p>
-            )}
-          </Card>
-          <FolderBriefingCard folder={folder} />
-          <FolderTermsCard folder={folder} />
-          {!hasBase && (
-            <Callout tone="info" title="Folders exist only in the app for now">
-              Choose a base folder in{' '}
-              <Link to="/settings?tab=folders">Settings → Folders</Link> to keep each folder's meetings and recordings together on disk.
-            </Callout>
+      {/* One panel at a time instead of a long stack of cards. */}
+      <Segmented
+        role="tablist"
+        label="Folder views"
+        className="mb-5"
+        value={tab}
+        onChange={setTab}
+        options={TABS.map((t) => ({
+          value: t.id,
+          label: t.id === 'meetings' && meetings ? `${t.label} (${meetings.length})` : t.label,
+          icon: t.icon,
+        }))}
+      />
+      {/* Panels stay mounted so requests survive tab switches. */}
+      <div className={clsx(tab !== 'meetings' && 'hidden')}>
+        <Card padded={false}>
+          {meetings === null ? (
+            <div className="flex justify-center py-6">
+              <Spinner />
+            </div>
+          ) : meetings.length ? (
+            <ul className="divide-y divide-line">
+              {[...meetings].reverse().map((m) => (
+                <FolderMeetingRow key={m.id} meeting={m} />
+              ))}
+            </ul>
+          ) : (
+            <p className="px-5 py-6 text-center text-[13px] text-muted">
+              No meetings yet. Import a recording here, record into this folder, or move meetings in from the Meetings list.
+            </p>
           )}
-        </aside>
-
-        <section className="min-w-0">
-          <div role="tablist" className="mb-4 flex items-end gap-1 border-b border-line">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.id}
-                onClick={() => setTab(t.id)}
-                className={clsx(
-                  '-mb-px inline-flex h-10 items-center gap-2 border-b-2 px-3 text-sm transition-colors',
-                  tab === t.id ? 'border-accent font-medium text-text' : 'border-transparent text-muted hover:text-text',
-                )}
-              >
-                <t.icon size={14} />
-                {t.label}
-              </button>
-            ))}
-          </div>
-          {/* Panels stay mounted so requests survive tab switches. */}
-          <div className={clsx(tab !== 'summary' && 'hidden')}>
-            <FolderSummaryPanel folder={folder} />
-          </div>
-          <div className={clsx(tab !== 'progress' && 'hidden')}>
-            <ProgressPanel folder={folder} meetings={meetings ?? []} />
-          </div>
-          <div className={clsx(tab !== 'chat' && 'hidden')}>
-            <FolderChatPanel folder={folder} />
-          </div>
-          <div className={clsx(tab !== 'extract' && 'hidden')}>
-            <ExtractPanel folder={folder} meetings={meetings ?? []} />
-          </div>
-        </section>
+        </Card>
+      </div>
+      <div className={clsx(tab !== 'summary' && 'hidden')}>
+        <FolderSummaryPanel folder={folder} />
+      </div>
+      <div className={clsx(tab !== 'progress' && 'hidden')}>
+        <ProgressPanel folder={folder} meetings={meetings ?? []} />
+      </div>
+      <div className={clsx(tab !== 'chat' && 'hidden')}>
+        <FolderChatPanel folder={folder} />
+      </div>
+      <div className={clsx(tab !== 'extract' && 'hidden')}>
+        <ExtractPanel folder={folder} meetings={meetings ?? []} />
+      </div>
+      <div className={clsx('space-y-5', tab !== 'context' && 'hidden')}>
+        <FolderContextCard folder={folder} />
+        {!hasBase && (
+          <Callout tone="info" title="Folders exist only in the app for now">
+            Choose a base folder in <Link to="/settings?tab=folders">Settings → Folders</Link> to keep each folder's
+            meetings and recordings together on disk.
+          </Callout>
+        )}
       </div>
 
       <Modal

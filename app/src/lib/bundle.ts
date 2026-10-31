@@ -29,6 +29,9 @@ export interface MeetingBundle {
   schema: number;
   app: 'meeting-helper';
   exportedAt: string;
+  // The sender's own name (Settings → selfName) in a meeting shared with
+  // someone; absent in backups and sidecars.
+  exportedBy?: string | null;
   meeting: {
     uid: string;
     title: string;
@@ -234,6 +237,51 @@ export function remapCitations(text: string, ids: Map<number, number>): string {
   });
 }
 
+// ---------- Shared meetings ----------
+
+// A meeting exported for someone else: its speakers grouped across transcripts
+// so the recipient can name each person once. The sender's mic speaker (isSelf)
+// is one group, whatever it was labelled.
+export interface BundleSpeaker {
+  key: string;
+  label: string;
+  name: string | null;
+  isSelf: boolean;
+}
+
+const speakerKey = (s: { label: string; name: string | null; isSelf: boolean }) => (s.isSelf ? 'self' : `s:${s.name ?? s.label}`);
+
+export function bundleSpeakers(b: MeetingBundle): BundleSpeaker[] {
+  // Active transcript first so its order wins.
+  const ordered = [...b.transcripts].sort(
+    (x, y) => Number(y.id === b.meeting.activeTranscriptId) - Number(x.id === b.meeting.activeTranscriptId),
+  );
+  const out = new Map<string, BundleSpeaker>();
+  for (const t of ordered) {
+    for (const s of t.speakers) {
+      const key = speakerKey(s);
+      if (!out.has(key)) out.set(key, { key, label: s.label, name: s.name, isSelf: s.isSelf });
+    }
+  }
+  return [...out.values()];
+}
+
+// The bundle as the recipient stores it: speakers renamed by key, nobody is
+// "you" (the sender's mic is not the recipient's), and no sender folder.
+export function renameSharedSpeakers(b: MeetingBundle, names: Record<string, string>): MeetingBundle {
+  return {
+    ...b,
+    folder: null,
+    transcripts: b.transcripts.map((t) => ({
+      ...t,
+      speakers: t.speakers.map((s) => {
+        const name = names[speakerKey(s)]?.trim();
+        return { ...s, name: name || s.name, isSelf: false };
+      }),
+    })),
+  };
+}
+
 // ---------- Import ----------
 
 export type ImportStatus = 'imported' | 'updated' | 'skipped';
@@ -276,16 +324,18 @@ function settledStatus(b: MeetingBundle): { status: MeetingStatus; error: string
 // Imports one bundle. `dir` is the directory holding meeting.json and the media
 // (it becomes the meeting's dirPath); null when there is none (e.g. restored
 // data whose media comes later). A meeting that already exists (same uid) is
-// replaced only when the bundle's updatedAt is newer; otherwise skipped.
+// replaced only when the bundle's updatedAt is newer (or `force`); otherwise
+// skipped. `folderId` (null = Unsorted) overrides the bundle's folder.
 export async function importBundle(
   bundle: MeetingBundle,
   dir: string | null,
+  opts: { force?: boolean; folderId?: number | null } = {},
 ): Promise<{ status: ImportStatus; meetingId: number }> {
   const b = parseBundle(bundle);
   const existing = await db.getMeetingByUid(b.meeting.uid);
-  if (existing && existing.updatedAt >= b.meeting.updatedAt) return { status: 'skipped', meetingId: existing.id };
+  if (existing && !opts.force && existing.updatedAt >= b.meeting.updatedAt) return { status: 'skipped', meetingId: existing.id };
 
-  const folderId = await resolveFolder(b.folder);
+  const folderId = opts.folderId !== undefined ? opts.folderId : await resolveFolder(b.folder);
   const { status, error } = settledStatus(b);
   // Without a directory (data-only restore) keep what this machine already has.
   const dirPath = dir ?? existing?.dirPath ?? null;

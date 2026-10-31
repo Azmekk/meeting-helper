@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, FolderOpen, MonitorPlay, Wrench } from 'lu
 import { useState } from 'react';
 import {
   FORMAT_OPTIONS,
+  MEETING_SCENE,
   QUALITY_OPTIONS,
   SIMPLE_ENCODER_OPTIONS,
   configureObs,
@@ -158,7 +159,7 @@ export default function OutputSettingsCard() {
                   </option>
                 ))}
               </Select>
-              {!scenes.includes('Meeting') && (
+              {!scenes.includes(MEETING_SCENE) && (
                 <Button
                   type="button"
                   icon={MonitorPlay}
@@ -167,11 +168,11 @@ export default function OutputSettingsCard() {
                   onClick={() =>
                     void run('createScene', async () => {
                       await createMeetingScene();
-                      toast('Created the “Meeting” scene with your main display.', 'success');
+                      toast(`Created the “${MEETING_SCENE}” scene with your main display and mic.`, 'success');
                     })
                   }
                 >
-                  Create “Meeting” scene
+                  Create “{MEETING_SCENE}” scene
                 </Button>
               )}
             </div>
@@ -179,7 +180,7 @@ export default function OutputSettingsCard() {
         </div>
 
         {setup && (
-          <div className="rounded-lg border border-line bg-sunken/50 p-4">
+          <div className="rounded-2xl bg-fill/60 p-4">
             <div className="mb-3 flex items-center justify-between gap-4">
               <div>
                 <div className="text-sm font-medium">Audio tracks</div>

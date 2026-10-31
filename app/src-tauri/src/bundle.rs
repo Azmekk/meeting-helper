@@ -281,6 +281,33 @@ pub fn import_zip_impl(args: &ImportZipArgs, emit: impl FnMut(Progress)) -> Resu
     extract(&mut zip, dest, emit)
 }
 
+/// Reads one text entry (e.g. manifest.json) without unpacking the zip, so the
+/// importer can look inside first. None when the entry isn't there.
+pub fn read_zip_text_impl(zip_path: &str, name: &str) -> Result<Option<String>, String> {
+    const MAX_TEXT: u64 = 256 << 20;
+    let path = Path::new(zip_path);
+    let file = File::open(path).map_err(|e| format!("Couldn't open {}: {e}", path.display()))?;
+    let mut zip = ZipArchive::new(BufReader::new(file)).map_err(|e| format!("Not a valid zip file: {e}"))?;
+    let mut f = match zip.by_name(name) {
+        Ok(f) => f,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(e) => return Err(format!("Couldn't read the zip: {e}")),
+    };
+    if f.size() > MAX_TEXT {
+        return Err(format!("{name} is too large"));
+    }
+    let mut text = String::new();
+    f.read_to_string(&mut text).map_err(|e| format!("Couldn't read {name}: {e}"))?;
+    Ok(Some(text))
+}
+
+#[tauri::command]
+pub async fn read_zip_text(zip_path: String, name: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || read_zip_text_impl(&zip_path, &name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn export_zip(args: ExportZipArgs, on_progress: Channel<Progress>) -> Result<u64, String> {
     tauri::async_runtime::spawn_blocking(move || {

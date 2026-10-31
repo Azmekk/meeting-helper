@@ -11,6 +11,7 @@ import type { CiteProps, CiteTarget } from '../components/meeting/AiMarkdown';
 import { CloudMediaBanner } from '../components/meeting/CloudMediaBanner';
 import { MediaPlayer } from '../components/meeting/MediaPlayer';
 import { MeetingHeader } from '../components/meeting/MeetingHeader';
+import { ExportMeetingModal } from '../components/meeting/ShareMeeting';
 import { PROVIDER_IDS, PROVIDER_LABEL, isJobActive, speakerColor } from '../components/meeting/shared';
 import { SpeakersPanel } from '../components/meeting/SpeakersPanel';
 import { TranscriptEditor, type SegmentActions } from '../components/meeting/TranscriptEditor';
@@ -22,6 +23,7 @@ import {
   IconButton,
   Input,
   Modal,
+  Segmented,
   Spinner,
   Switch,
   clsx,
@@ -92,6 +94,7 @@ export default function MeetingScreen() {
   const [confirmDeleteTranscript, setConfirmDeleteTranscript] = useState(false);
   const [deletingTranscript, setDeletingTranscript] = useState(false);
   const [deleteMeetingOpen, setDeleteMeetingOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [tab, setTab] = useState<RightTab>('transcript');
   const [citedId, setCitedId] = useState<number | null>(null);
 
@@ -560,7 +563,7 @@ export default function MeetingScreen() {
   }
   if (meeting === null) {
     return (
-      <div className="mx-auto max-w-5xl px-8 py-8">
+      <div className="mx-auto max-w-7xl px-8 py-8">
         <Card>
           <EmptyState
             icon={FileText}
@@ -590,6 +593,7 @@ export default function MeetingScreen() {
         onTranscribe={transcribe}
         onExport={exportAs}
         onShowInFolder={showInFolder}
+        onShare={() => setShareOpen(true)}
         folders={folders}
         onMoveToFolder={moveToFolder}
         onDeleteTranscript={() => setConfirmDeleteTranscript(true)}
@@ -602,9 +606,9 @@ export default function MeetingScreen() {
         </Callout>
       )}
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(300px,400px)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]">
         {/* Left: player + speakers */}
-        <aside className="space-y-5 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto lg:pb-2">
+        <aside className="space-y-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto lg:pb-2">
           {meeting.mediaPath ? (
             <MediaPlayer
               path={meeting.mediaPath}
@@ -648,7 +652,7 @@ export default function MeetingScreen() {
               tone="error"
               // Without playable media the failure was in recording/conversion, not transcription.
               title={meeting.mediaPath ? 'Transcription failed' : 'Couldn’t process this meeting'}
-              className="mb-5"
+              className="mb-4"
             >
               <p className="break-words">{meeting.error ?? 'Unknown error.'}</p>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -693,24 +697,14 @@ export default function MeetingScreen() {
           )}
 
           {detail && (
-            <div role="tablist" aria-label="Meeting views" className="mb-3 flex items-end gap-1 border-b border-line">
-              {RIGHT_TABS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === t.id}
-                  onClick={() => setTab(t.id)}
-                  className={clsx(
-                    '-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] font-medium transition-colors',
-                    tab === t.id ? 'border-accent text-text' : 'border-transparent text-muted hover:text-text',
-                  )}
-                >
-                  <t.icon size={14} />
-                  {t.label}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              role="tablist"
+              label="Meeting views"
+              value={tab}
+              onChange={setTab}
+              options={RIGHT_TABS.map((t) => ({ value: t.id, label: t.label, icon: t.icon }))}
+              className="mb-4"
+            />
           )}
 
           {/* AI panels stay mounted while hidden so a running request survives tab switches. */}
@@ -730,14 +724,14 @@ export default function MeetingScreen() {
 
           {detail && (
             <div className={clsx(tab !== 'transcript' && 'hidden')}>
-              <div className="sticky top-0 z-20 -mx-3 mb-1 flex items-center gap-3 bg-bg/90 px-3 py-2.5 backdrop-blur">
-                <div className="text-[13px] text-muted">
+              <div className="surface sticky top-2 z-20 mb-3 flex items-center gap-3 rounded-full py-1.5 pr-2 pl-4">
+                <div className="text-[13px] whitespace-nowrap text-muted">
                   {segmentCount} segment{segmentCount === 1 ? '' : 's'}
                 </div>
                 <div className="ml-auto flex items-center gap-3">
                   <div className="flex items-center gap-1">
                     <div className="relative">
-                      <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
+                      <Search size={14} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted" />
                       <Input
                         ref={findRef}
                         type="search"
@@ -755,10 +749,10 @@ export default function MeetingScreen() {
                         }}
                         placeholder="Search this meeting"
                         title="Ctrl+F · Enter for next, Shift+Enter for previous"
-                        className="h-8 w-60 pr-[4.5rem] pl-8 text-[13px] [&::-webkit-search-cancel-button]:hidden"
+                        className="h-8 w-60 pr-[4.5rem] pl-8.5 text-[13px] [&::-webkit-search-cancel-button]:hidden"
                       />
                       {query.trim() && (
-                        <span className="absolute top-1/2 right-7 -translate-y-1/2 text-xs text-faint tabular-nums">
+                        <span className="absolute top-1/2 right-7 -translate-y-1/2 text-xs text-muted tabular-nums">
                           {matches.length ? `${Math.min(matchIndex, matches.length - 1) + 1}/${matches.length}` : '0'}
                         </span>
                       )}
@@ -788,7 +782,7 @@ export default function MeetingScreen() {
                       icon={ListFilter}
                       label={onlyMatches ? 'Show all lines' : 'Show only matching lines'}
                       onClick={() => setOnlyMatches((v) => !v)}
-                      className={clsx(onlyMatches && 'bg-accent-soft text-accent hover:bg-accent-soft')}
+                      className={clsx(onlyMatches && 'bg-accent-soft text-accent-ink hover:bg-accent-soft hover:text-accent-ink')}
                     />
                   </div>
                   {meeting.mediaPath && (
@@ -809,7 +803,7 @@ export default function MeetingScreen() {
               </div>
 
               {segmentCount === 0 ? (
-                <p className="px-3 py-10 text-center text-sm text-muted">This transcript has no text.</p>
+                <p className="surface rounded-card px-3 py-10 text-center text-sm text-muted">This transcript has no text.</p>
               ) : (
                 <TranscriptEditor
                   segments={detail.segments}
@@ -823,6 +817,8 @@ export default function MeetingScreen() {
                   onlyMatches={onlyMatches}
                   actions={actions}
                   onUserScroll={() => setFollow((f) => (f ? false : f))}
+                  meeting={meeting}
+                  folder={folders.find((f) => f.id === meeting.folderId) ?? null}
                 />
               )}
             </div>
@@ -855,6 +851,8 @@ export default function MeetingScreen() {
         </p>
       </Modal>
 
+      <ExportMeetingModal meeting={meeting} open={shareOpen} onClose={() => setShareOpen(false)} />
+
       <DeleteMeetingModal
         meeting={deleteMeetingOpen ? meeting : null}
         onClose={() => setDeleteMeetingOpen(false)}
@@ -875,7 +873,7 @@ const STAGES: { id: JobStage; label: string }[] = [
 function ProcessingPanel({ job }: { job: Job | undefined }) {
   const current = job ? STAGES.findIndex((s) => s.id === job.stage) : -1;
   return (
-    <div className="mb-5 rounded-xl border border-line bg-panel px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+    <div className="surface mb-4 rounded-card px-5 py-4">
       <div className="flex items-center gap-3">
         <Spinner size={18} className="text-accent" />
         <div className="min-w-0 flex-1 text-sm font-medium">{job?.message || 'Processing…'}</div>
@@ -885,15 +883,15 @@ function ProcessingPanel({ job }: { job: Job | undefined }) {
           <div key={s.id} className="min-w-0 flex-1">
             <div
               className={clsx(
-                'h-1 rounded-full transition-colors',
-                i < current ? 'bg-accent' : i === current ? 'animate-pulse bg-accent' : 'bg-sunken',
+                'h-1.5 rounded-full transition-colors',
+                i < current ? 'bg-accent' : i === current ? 'animate-pulse bg-accent' : 'bg-fill-strong',
               )}
             />
-            <div className={clsx('mt-1.5 truncate text-[11px]', i <= current ? 'text-muted' : 'text-faint')}>{s.label}</div>
+            <div className={clsx('mt-1.5 truncate text-[11px]', i <= current ? 'font-medium text-text' : 'text-muted')}>{s.label}</div>
           </div>
         ))}
       </div>
-      <p className="mt-2 text-xs text-faint">You can leave this page; processing continues in the background.</p>
+      <p className="mt-2 text-xs text-muted">You can leave this page; processing continues in the background.</p>
     </div>
   );
 }

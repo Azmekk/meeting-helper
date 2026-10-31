@@ -10,7 +10,7 @@ export default function RecordScreen() {
   const connected = useRecorder((s) => s.connected);
 
   return (
-    <div className="mx-auto max-w-5xl px-8 py-8">
+    <div className="mx-auto max-w-7xl px-8 py-8">
       <PageHeader
         title="Record"
         description="Record an online meeting with OBS. When you stop, it's imported and transcribed automatically."
@@ -27,9 +27,10 @@ export default function RecordScreen() {
             <OutputSettingsCard />
           </div>
         ) : (
-          <div className="grid items-start gap-6 lg:grid-cols-2">
-            <ConnectionCard />
-            <ObsSetupGuide connected={false} />
+          // Side by side at equal height, so their edges line up.
+          <div className="grid gap-6 lg:grid-cols-2">
+            <ConnectionCard className="h-full" />
+            <ObsSetupGuide connected={false} className="h-full" />
           </div>
         )}
       </div>

@@ -1,15 +1,17 @@
-import { ArrowRight, Pause, Play, Square } from 'lucide-react';
+import { ArrowRight, Hourglass, Mic, MicOff, Pause, Play, Square } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   defaultMeetingTitle,
   pauseRecording,
   resumeRecording,
+  setMicMuted,
   setOthersInRoom,
   setRecordingTerms,
   setRecordingTitle,
   startRecording,
   stopRecording,
+  trackExternalRecording,
   useRecorder,
 } from '../../lib/obs';
 import { useSettings } from '../../lib/settings';
@@ -49,7 +51,11 @@ export default function RecordPanel() {
   const title = useRecorder((s) => s.title);
   const lastIngest = useRecorder((s) => s.lastIngest);
   const restartNeeded = useRecorder((s) => s.restartNeeded);
+  // Started in OBS itself and ignored in ExternalRecordingDialog.
+  const untracked = useRecorder((s) => s.recording && !!s.externalRecording?.ignored);
   const splitTracks = useSettings((s) => s.settings.splitTracks);
+  const micMuted = useRecorder((s) => s.setup?.micMuted ?? false);
+  const hasMic = useRecorder((s) => !!s.setup?.micInput);
   const elapsed = useElapsed(startedAt, paused ? pausedAt : null);
 
   const [placeholder] = useState(() => defaultMeetingTitle());
@@ -63,6 +69,36 @@ export default function RecordPanel() {
   }
 
   const onBigButton = () => void act(recording ? stopRecording : startRecording);
+
+  // OBS is busy with a recording the user chose not to track: no meeting
+  // controls until it ends, just a way to change their mind or end it.
+  if (untracked) {
+    return (
+      <Card>
+        <div className="flex flex-col items-center gap-4 py-6 text-center sm:flex-row sm:gap-6 sm:text-left">
+          <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-fill text-muted">
+            <Hourglass size={24} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[17px] font-semibold">Waiting for the OBS recording to end</h2>
+            <p className="mt-1 text-[13px] text-muted">
+              OBS started recording on its own and you chose not to track it, so it won’t become a meeting. You can
+              record a meeting once it ends. Running for{' '}
+              <span className="font-mono tabular-nums">{formatElapsed(elapsed)}</span>.
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap justify-center gap-2">
+            <Button variant="secondary" onClick={() => void act(stopRecording)} loading={busy === 'stopping'}>
+              Stop it in OBS
+            </Button>
+            <Button variant="primary" onClick={trackExternalRecording}>
+              Track as meeting
+            </Button>
+          </div>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card padded={false}>
@@ -139,6 +175,16 @@ export default function RecordPanel() {
                 >
                   {paused ? 'Resume' : 'Pause'}
                 </Button>
+                {hasMic && (
+                  <Button
+                    icon={micMuted ? MicOff : Mic}
+                    onClick={() => void act(() => setMicMuted(!micMuted))}
+                    title={micMuted ? 'Your mic is muted in the recording' : 'Mute your mic in the recording and transcript'}
+                    className={clsx(micMuted && 'bg-warn-soft! text-warn!')}
+                  >
+                    {micMuted ? 'Unmute mic' : 'Mute mic'}
+                  </Button>
+                )}
                 <Button
                   variant="danger"
                   icon={Square}
@@ -149,14 +195,21 @@ export default function RecordPanel() {
                 </Button>
               </>
             ) : null}
+            {untracked && (
+              <Button size="sm" variant="ghost" onClick={trackExternalRecording}>
+                Track it
+              </Button>
+            )}
             <span className="text-xs text-muted">
               {!connected
                 ? 'Connect to OBS below to record.'
-                : recording
-                  ? 'You can rename the meeting or change its folder until you stop.'
-                  : busy === 'starting'
-                    ? 'Starting…'
-                    : 'Press the red button to start. Leave the title empty to name it by date and time.'}
+                : untracked
+                  ? 'Started in OBS and not tracked: it won’t be saved as a meeting.'
+                  : recording
+                    ? 'You can rename the meeting or change its folder until you stop.'
+                    : busy === 'starting'
+                      ? 'Starting…'
+                      : 'Press the red button to start. Leave the title empty to name it by date and time.'}
             </span>
           </div>
         </div>

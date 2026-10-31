@@ -19,12 +19,13 @@ function ExtLink({ href, children }: { href: string; children: ReactNode }) {
 
 // How to get OBS talking to Meeting Helper. Expanded while not connected;
 // collapsible once connected.
-export default function ObsSetupGuide({ connected }: { connected: boolean }) {
+export default function ObsSetupGuide({ connected, className }: { connected: boolean; className?: string }) {
   const [open, setOpen] = useState(!connected);
   useEffect(() => setOpen(!connected), [connected]);
 
   return (
     <Card
+      className={className}
       title="Set up OBS"
       description={connected ? 'Done. Here for reference.' : 'One-time setup, about two minutes.'}
       actions={
@@ -32,13 +33,12 @@ export default function ObsSetupGuide({ connected }: { connected: boolean }) {
           icon={ChevronDown}
           label={open ? 'Collapse' : 'Expand'}
           onClick={() => setOpen((o) => !o)}
-          className={clsx('transition-transform', open && 'rotate-180')}
+          className={clsx('transition-[transform,background-color,color] duration-300', open && 'rotate-180')}
         />
       }
-      padded={open}
+      open={open}
     >
-      {open && (
-        <Steps
+      <Steps
           steps={[
             <>
               Install <b>OBS Studio 30 or newer</b> from{' '}
@@ -60,7 +60,6 @@ export default function ObsSetupGuide({ connected }: { connected: boolean }) {
             </>,
           ]}
         />
-      )}
     </Card>
   );
 }

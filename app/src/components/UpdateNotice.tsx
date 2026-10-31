@@ -71,7 +71,7 @@ export function SidebarUpdateNotice() {
     <button
       type="button"
       onClick={() => useUpdate.setState({ dismissed: false })}
-      className="mb-2 flex w-full items-center gap-2 rounded-lg bg-accent-soft px-2.5 py-2 text-left text-[13px] font-medium text-accent transition-colors hover:bg-accent-soft/70"
+      className="mb-2 flex w-full items-center gap-2 rounded-xl bg-accent-soft px-3 py-2 text-left text-[13px] font-semibold text-accent-ink transition-colors hover:bg-accent-soft/70"
     >
       <ArrowUpCircle size={15} className="shrink-0" />
       <span className="flex-1">Version {available.version} is out</span>

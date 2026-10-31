@@ -1,8 +1,9 @@
-import { CloudUpload, EyeOff, Folder, Languages, Mic, Sparkles, Star, Wrench, type LucideIcon } from 'lucide-react';
+import { CloudUpload, EyeOff, Folder, Languages, Mic, Palette, Sparkles, Star, Wrench, type LucideIcon } from 'lucide-react';
 import { useEffect, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader, clsx } from '../components/ui';
 import { AiSection } from '../components/settings/AiSection';
+import { AppearanceSection } from '../components/settings/AppearanceSection';
 import { BackupSection } from '../components/settings/BackupSection';
 import { DataSection } from '../components/settings/DataSection';
 import { FfmpegSection } from '../components/settings/FfmpegSection';
@@ -17,7 +18,7 @@ import { SavedIndicator, loadKeyStatus, useKeyStatus } from '../components/setti
 import { useSettings } from '../lib/settings';
 import type { ProviderId } from '../lib/types';
 
-type TabId = ProviderId | 'ai' | 'language' | 'recording' | 'folders' | 'backup' | 'secret' | 'system';
+type TabId = ProviderId | 'appearance' | 'ai' | 'language' | 'recording' | 'folders' | 'backup' | 'secret' | 'system';
 
 const PROVIDER_TABS: { id: ProviderId; label: string }[] = [
   { id: 'soniox', label: 'Soniox' },
@@ -25,6 +26,7 @@ const PROVIDER_TABS: { id: ProviderId; label: string }[] = [
 ];
 
 const GENERAL_TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
+  { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'ai', label: 'AI', icon: Sparkles },
   { id: 'language', label: 'Language', icon: Languages },
   { id: 'recording', label: 'Recording', icon: Mic },
@@ -51,7 +53,7 @@ export default function SettingsScreen() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-5xl px-8 py-8">
+    <div className="mx-auto max-w-7xl px-8 py-8">
       <PageHeader
         title="Settings"
         description="Changes are saved automatically."
@@ -59,7 +61,7 @@ export default function SettingsScreen() {
       />
 
       <div className="flex items-start gap-8">
-        <nav role="tablist" aria-orientation="vertical" aria-label="Settings sections" className="sticky top-8 w-44 shrink-0 space-y-0.5">
+        <nav role="tablist" aria-orientation="vertical" aria-label="Settings sections" className="sticky top-8 w-[180px] shrink-0 space-y-0.5">
           <NavHeading>Transcription</NavHeading>
           {PROVIDER_TABS.map((t) => (
             <Tab key={t.id} active={tab === t.id} onClick={() => select(t.id)}>
@@ -82,7 +84,7 @@ export default function SettingsScreen() {
           ))}
         </nav>
 
-        <div role="tabpanel" className="min-w-0 max-w-3xl flex-1 space-y-6">
+        <div role="tabpanel" className="min-w-0 max-w-3xl flex-1 space-y-[18px]">
           {(tab === 'soniox' || tab === 'elevenlabs') && (
             <>
               <p className="text-[13px] text-muted">
@@ -92,6 +94,7 @@ export default function SettingsScreen() {
               <ProviderCard key={tab} id={tab} />
             </>
           )}
+          {tab === 'appearance' && <AppearanceSection />}
           {tab === 'ai' && <AiSection />}
           {tab === 'language' && <LanguageSection />}
           {tab === 'folders' && <FoldersSection />}
@@ -117,7 +120,7 @@ export default function SettingsScreen() {
 }
 
 function NavHeading({ children }: { children: ReactNode }) {
-  return <div className="px-3 pb-1 pt-4 text-[11px] font-medium uppercase tracking-wider text-faint first:pt-0">{children}</div>;
+  return <div className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted first:pt-0">{children}</div>;
 }
 
 function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
@@ -128,8 +131,8 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
       aria-selected={active}
       onClick={onClick}
       className={clsx(
-        'flex h-9 w-full items-center gap-2.5 whitespace-nowrap rounded-md px-3 text-left text-sm transition-colors',
-        active ? 'bg-accent-soft font-medium text-text' : 'text-muted hover:bg-hover hover:text-text',
+        'flex h-[34px] w-full items-center gap-2.5 whitespace-nowrap rounded-[10px] px-3 text-left text-[14px] transition-colors',
+        active ? 'bg-accent-soft font-semibold text-accent-ink' : 'text-text/80 hover:bg-hover hover:text-text',
       )}
     >
       {children}

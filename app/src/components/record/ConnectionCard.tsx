@@ -9,7 +9,7 @@ import { Badge, Button, Callout, Card, Field, Input, errorMessage, toast } from 
 import { KEY_STORE } from '../../lib/platform';
 import { OBS_DOWNLOAD_URL, isObsInstalled } from '../../lib/requirements';
 
-export default function ConnectionCard() {
+export default function ConnectionCard({ className }: { className?: string }) {
   const status = useRecorder((s) => s.status);
   const error = useRecorder((s) => s.error);
   const obsVersion = useRecorder((s) => s.obsVersion);
@@ -66,6 +66,7 @@ export default function ConnectionCard() {
 
   return (
     <Card
+      className={className}
       title="OBS connection"
       description={connected && obsVersion ? `OBS Studio ${obsVersion}` : 'Meeting Helper records through OBS Studio.'}
       actions={badge}

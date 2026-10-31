@@ -8,7 +8,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Button, Callout, Card, EmptyState, IconButton, Modal, Spinner, Textarea, errorMessage, toast } from '../ui';
 import * as db from '../../lib/db';
 import { formatDate, formatTimestamp, formatUsd } from '../../lib/format';
-import { askMeeting, hasAiKey, isAbortError, summarizeMeeting } from '../../lib/ai/meeting';
+import { askMeeting, hasAiKey, isAbortError, onMeetingSummarized, startSummary, stopSummary, useSummaryJobs } from '../../lib/ai/meeting';
 import { effectiveModel } from '../../lib/ai';
 import { useSettings } from '../../lib/settings';
 import type { AiDoc, ChatMessage, Meeting } from '../../lib/types';
@@ -75,34 +75,37 @@ export function SummaryPanel({ meetingId, hasText, cite }: { meetingId: number; 
   const hasKey = useAiKey();
   const summaryModel = useSettings((s) => effectiveModel('summary', s.settings));
   const [doc, setDoc] = useState<AiDoc | null | undefined>(undefined);
-  const [streaming, setStreaming] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const { start, stop } = useAbortable();
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // The run itself lives in lib/ai/meeting.ts, so leaving this tab doesn't stop it.
+  const job = useSummaryJobs((s) => s[meetingId]);
+  const streaming = job?.running ? job.text : null;
+  const error = job?.error ?? loadError;
 
   useEffect(() => {
+    let alive = true;
+    const load = () =>
+      db
+        .getAiDoc('meeting', meetingId, 'summary')
+        .then((d) => alive && setDoc(d))
+        .catch((err) => {
+          if (!alive) return;
+          setDoc(null);
+          setLoadError(errorMessage(err));
+        });
     setDoc(undefined);
-    db.getAiDoc('meeting', meetingId, 'summary')
-      .then(setDoc)
-      .catch((err) => {
-        setDoc(null);
-        setError(errorMessage(err));
-      });
+    void load();
+    // A run started here, in the "Recording saved" dialog or before leaving the tab.
+    const off = onMeetingSummarized((id) => id === meetingId && void load());
+    return () => {
+      alive = false;
+      off();
+    };
   }, [meetingId]);
 
   const generate = async () => {
-    const signal = start();
-    setError(null);
-    setStreaming('');
-    try {
-      const saved = await summarizeMeeting(meetingId, { signal, onText: setStreaming });
-      setDoc(saved);
-      toast('Summary ready', 'success');
-    } catch (err) {
-      if (!isAbortError(err)) setError(errorMessage(err));
-    } finally {
-      setStreaming(null);
-    }
+    if (await startSummary(meetingId)) toast('Summary ready', 'success');
   };
+  const stop = () => stopSummary(meetingId);
 
   if (doc === undefined || hasKey === undefined) {
     return (
@@ -120,7 +123,7 @@ export function SummaryPanel({ meetingId, hasText, cite }: { meetingId: number; 
       title="Summary"
       description={
         busy
-          ? `Writing with ${summaryModel}…`
+          ? `Writing with ${job?.model || summaryModel}… You can leave this page; it keeps going.`
           : doc
             ? `${doc.model ?? 'Unknown model'} · ${formatUsd(doc.costUsd)} · ${formatDate(doc.createdAt)}`
             : 'Overview, decisions, action items and open questions, each linked to the transcript.'
@@ -272,11 +275,11 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
           const el = e.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
-        className="max-h-[calc(100vh-20rem)] min-h-40 space-y-4 overflow-y-auto px-5 py-4"
+        className="max-h-[calc(100vh-20rem)] min-h-40 space-y-4 overflow-y-auto px-6 py-5"
       >
         {!messages.length && !pending && (
           <div className="flex flex-col items-center gap-3 py-6 text-center">
-            <MessageSquare size={22} className="text-faint" />
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-fill text-muted"><MessageSquare size={20} /></span>
             <div className="flex flex-wrap justify-center gap-2">
               {SUGGESTIONS.map((s) => (
                 <Button key={s} size="sm" variant="secondary" disabled={!canSend} onClick={() => send(s)}>
@@ -303,7 +306,7 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
         )}
       </div>
 
-      <div className="border-t border-line px-5 py-3">
+      <div className="border-t border-line px-5 py-3.5">
         {error && (
           <Callout tone="error" className="mb-3">
             <p className="break-words">{error}</p>
@@ -331,7 +334,7 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
             rows={2}
             disabled={!hasKey || !hasText}
             placeholder="Ask about this meeting (Enter to send, Shift+Enter for a new line)"
-            className="max-h-40 min-h-[2.5rem] resize-y text-[13px]"
+            className="max-h-40 min-h-[2.5rem] resize-y rounded-[20px] text-[14px]"
           />
           {pending ? (
             <Button icon={Square} onClick={stop}>
@@ -370,14 +373,14 @@ export function ChatBubble({ role, text, meta, cite }: { role: ChatMessage['role
   if (role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-soft px-3.5 py-2 text-sm whitespace-pre-wrap text-text">{text}</div>
+        <div className="max-w-[85%] rounded-[20px] rounded-br-md bg-accent px-4 py-2 text-[15px] leading-snug whitespace-pre-wrap text-on-accent">{text}</div>
       </div>
     );
   }
   return (
     <div className="max-w-[95%]">
       <AiMarkdown text={text} {...cite} />
-      {meta && <div className="mt-1 text-[11px] text-faint">{meta}</div>}
+      {meta && <div className="mt-1.5 text-[11.5px] text-muted">{meta}</div>}
     </div>
   );
 }
@@ -396,14 +399,14 @@ export function CitedLine({
   onClose: () => void;
 }) {
   return (
-    <div className="mb-4 flex items-start gap-3 rounded-lg border border-line bg-panel px-3.5 py-2.5 text-[13px] shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-      <Play size={14} className="mt-0.5 shrink-0 text-accent" />
+    <div className="surface mb-4 flex items-center gap-3 rounded-2xl py-2 pr-2 pl-3 text-[13px]">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-ink"><Play size={13} className="translate-x-px" /></span>
       <div className="min-w-0 flex-1">
-        <span className="mr-2 text-faint tabular-nums">{formatTimestamp(target.startMs)}</span>
+        <span className="mr-2 rounded-full bg-accent-soft px-[7px] py-px text-[12px] font-semibold text-accent-ink tabular-nums">{formatTimestamp(target.startMs)}</span>
         <span className="mr-1.5 font-medium">{target.speaker}:</span>
         <span className="text-muted">{target.text}</span>
       </div>
-      <Button size="sm" variant="ghost" onClick={onShow}>
+      <Button size="sm" variant="secondary" onClick={onShow}>
         Show in transcript
       </Button>
       <IconButton size="sm" icon={X} label="Close" onClick={onClose} />

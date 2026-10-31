@@ -1,8 +1,9 @@
 // The phone's WebSocket to remote.rs: encrypts, checks counters, reconnects
 // when the phone wakes up or the network comes back, and asks for the current
-// state (hello) after every connect.
+// state (hello) after every connect. Deltas are applied here (protocol.ts); a
+// gap in their sequence asks for a full state again.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CLOSE_BAD_KEY, CLOSE_REPAIRED, type FromPhone, type ToPhone } from './protocol';
+import { CLOSE_BAD_KEY, CLOSE_REPAIRED, applyToPhone, type FromPhone, type PhoneState, type ToPhone } from './protocol';
 import { FROM_PHONE, TO_PHONE, open, seal } from './crypto';
 
 export type ConnState = 'connecting' | 'open' | 'reconnecting' | 'badKey' | 'repaired';
@@ -34,7 +35,9 @@ function nextCounter(): bigint {
 
 export function useRemoteConnection(key: Uint8Array | null) {
   const [state, setState] = useState<ConnState>('connecting');
-  const [message, setMessage] = useState<ToPhone | null>(null);
+  const [phone, setPhone] = useState<PhoneState | null>(null);
+  const current = useRef<PhoneState | null>(null);
+  const resyncing = useRef(false);
   const ws = useRef<WebSocket | null>(null);
   const lastIn = useRef(0n);
   const stopped = useRef(false);
@@ -71,6 +74,9 @@ export function useRemoteConnection(key: Uint8Array | null) {
 
     socket.onopen = () => {
       attempts.current = 0;
+      // Until the hello's state arrives, deltas can't be applied.
+      current.current = current.current && { ...current.current, seq: Number.NaN };
+      resyncing.current = true;
       setState('open');
       hello();
     };
@@ -86,13 +92,30 @@ export function useRemoteConnection(key: Uint8Array | null) {
       // Replayed or out-of-date frame.
       if (opened.counter <= lastIn.current) return;
       lastIn.current = opened.counter;
-      if (helloTimer.current) clearTimeout(helloTimer.current);
-      helloTimer.current = null;
+      let msg: ToPhone;
       try {
-        setMessage(JSON.parse(new TextDecoder().decode(opened.msg)) as ToPhone);
+        msg = JSON.parse(new TextDecoder().decode(opened.msg)) as ToPhone;
       } catch {
-        // ignore malformed
+        return; // malformed
       }
+      const next = applyToPhone(current.current, msg);
+      if (!next) {
+        // Missed a frame: ask for everything once, ignore deltas until it comes.
+        if (!resyncing.current) {
+          resyncing.current = true;
+          hello();
+        }
+        return;
+      }
+      if (msg.type === 'state') {
+        // The hello was answered; deltas alone don't prove that (the state
+        // frame could have been dropped), so they don't stop the timeout.
+        if (helloTimer.current) clearTimeout(helloTimer.current);
+        helloTimer.current = null;
+      }
+      resyncing.current = false;
+      current.current = next;
+      setPhone(next);
     };
     socket.onclose = (e) => {
       if (ws.current !== socket) return;
@@ -141,5 +164,5 @@ export function useRemoteConnection(key: Uint8Array | null) {
 
   const send = useCallback((msg: FromPhone) => (ws.current ? sendRaw(ws.current, msg) : false), [sendRaw]);
 
-  return { state, message, send };
+  return { state, phone, send };
 }

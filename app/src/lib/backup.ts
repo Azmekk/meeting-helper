@@ -18,8 +18,20 @@ import { create } from 'zustand';
 import { errorMessage, toast } from '../components/ui';
 import * as db from './db';
 import type { BackupFile } from './db';
-import { BUNDLE_FILE, BUNDLE_SCHEMA, buildBundle, flushSidecars, importBundle, isInside, parseBundle, samePath, writeMeetingSidecar, type MeetingBundle } from './bundle';
-import { ensureMeetingDir, refreshFolders } from './folders';
+import {
+  BUNDLE_FILE,
+  BUNDLE_SCHEMA,
+  buildBundle,
+  flushSidecars,
+  importBundle,
+  isInside,
+  parseBundle,
+  renameSharedSpeakers,
+  samePath,
+  writeMeetingSidecar,
+  type MeetingBundle,
+} from './bundle';
+import { baseFolder, ensureMeetingDir, refreshFolders, syncMeetingDir } from './folders';
 import {
   FOLDER_BUNDLE_FILE,
   buildFolderBundle,
@@ -61,7 +73,9 @@ export interface ManifestFolder {
 
 export interface BackupManifest {
   app: 'meeting-helper';
-  kind: 'backup' | 'zip';
+  // 'share': one meeting exported for someone else (exportZip with `share`).
+  kind: 'backup' | 'zip' | 'share';
+  exportedBy?: string | null;
   appVersion: string;
   bundleSchema: number;
   createdAt: string;
@@ -653,6 +667,36 @@ export async function downloadAllMedia(onProgress?: (p: BackupProgress) => void)
 export interface ZipSelection {
   meetingIds: number[] | 'all';
   folderIds: number[] | 'all';
+  // Exporting one meeting for someone else: no folders, no local paths, and
+  // only the parts chosen here (transcripts always go).
+  share?: ShareOptions;
+}
+
+export interface ShareOptions {
+  recording: boolean;
+  aiDocs: boolean; // summary and other AI docs, action items, extractions
+  chat: boolean;
+}
+
+export const SHARE_EXT = '.meeting.zip';
+
+// The user's own name for the recipient to see, unless it's still the default.
+function senderName(): string | null {
+  const name = getSettings().selfName.trim();
+  return name && name !== 'Me' ? name : null;
+}
+
+function shareBundle(b: MeetingBundle, opts: ShareOptions): MeetingBundle {
+  return {
+    ...b,
+    exportedBy: senderName(),
+    meeting: { ...b.meeting, mediaPath: null, sourcePath: null },
+    folder: null,
+    aiDocs: opts.aiDocs ? b.aiDocs : [],
+    actionItems: opts.aiDocs ? b.actionItems : [],
+    extractions: opts.aiDocs ? b.extractions : [],
+    chat: opts.chat ? b.chat : [],
+  };
 }
 
 async function tempDir(kind: string): Promise<string> {
@@ -674,21 +718,38 @@ export async function exportZip(sel: ZipSelection, outPath: string, onProgress?:
     const meetings = (await db.listMeetings()).filter(
       (m) => m.status !== 'recording' && (sel.meetingIds === 'all' || sel.meetingIds.includes(m.id) || (m.folderId != null && folderIds.has(m.folderId))),
     );
-    for (const m of meetings) if (m.folderId != null) folderIds.add(m.folderId);
+    const { share } = sel;
+    if (share) {
+      if (meetings.length !== 1) throw new Error('Choose one meeting to share.');
+      folderIds.clear();
+    } else {
+      for (const m of meetings) if (m.folderId != null) folderIds.add(m.folderId);
+    }
 
-    const manifest = await newManifest('zip');
+    const manifest = await newManifest(share ? 'share' : 'zip');
+    if (share) manifest.exportedBy = senderName();
     const entries: { srcDir: string; zipPrefix: string; skip?: string[] }[] = [];
     const extraFiles: { src: string; zipPath: string }[] = [];
     for (const [i, m] of meetings.entries()) {
       setProgress({ message: `Preparing ${i + 1} of ${meetings.length}: ${m.title}`, fraction: null }, onProgress);
-      const files = await localMediaFiles(m);
-      const bundle = withFileNames(await buildBundle(m.id), files, m);
+      let files = await localMediaFiles(m);
+      // A shared meeting carries one recording at most (not the original too).
+      if (share) files = !share.recording ? [] : files.some((f) => f.role === 'media') ? files.filter((f) => f.role === 'media') : files.slice(0, 1);
+      let bundle = withFileNames(await buildBundle(m.id), files, m);
+      if (share) bundle = shareBundle(bundle, share);
       const staged = await join(staging, 'meetings', m.uid);
       await mkdir(staged, { recursive: true });
       const json = await join(staged, BUNDLE_FILE);
       await writeTextFile(json, JSON.stringify(bundle, null, 1));
       const prefix = `meetings/${m.uid}`;
-      const hasDir = !!m.dirPath && (await fileExists(m.dirPath));
+      const hasDir = !share && !!m.dirPath && (await fileExists(m.dirPath));
+      // Shared: only the readable copies go along, nothing else from the directory.
+      if (share && m.dirPath) {
+        for (const name of share.aiDocs ? ['transcript.md', 'summary.md'] : ['transcript.md']) {
+          const p = await join(m.dirPath, name);
+          if (await fileExists(p)) extraFiles.push({ src: p, zipPath: `${prefix}/${name}` });
+        }
+      }
       // The whole directory (transcript.md, summary.md, …) with the staged
       // meeting.json instead of the one on disk.
       if (hasDir) entries.push({ srcDir: m.dirPath!, zipPrefix: prefix, skip: [BUNDLE_FILE] });
@@ -734,6 +795,7 @@ export interface ZipImportResult {
   skipped: number;
   folders: number;
   failed: { title: string; error: string }[];
+  meetingId?: number; // the last meeting imported or updated
 }
 
 // Moves the bundle's media from an unpacked directory to where the meeting
@@ -766,9 +828,53 @@ async function placeMedia(meetingId: number, srcDir: string, bundle: MeetingBund
   if (isMeetingDir) await writeMeetingSidecar(meetingId).catch(() => {});
 }
 
+// A meeting someone shared with you (.meeting.zip): imported through a dialog
+// that names the speakers. Your own zip exports restore as they are, so your
+// speaker stays marked as you.
+export interface SingleMeetingZip {
+  zipPath: string;
+  kind: BackupManifest['kind'];
+  exportedBy: string | null;
+  bundle: MeetingBundle;
+  existing: Meeting | null; // imported before (same uid)
+  recordingSize: number | null;
+}
+
+// Looks inside without unpacking. Null for anything else (backups with many
+// meetings, zips without a manifest), which importZip handles as before.
+export async function inspectZip(zipPath: string): Promise<SingleMeetingZip | null> {
+  const manifest = parseManifest(await native.readZipText(zipPath, MANIFEST_FILE));
+  if (!manifest || manifest.kind !== 'share' || manifest.meetings.length !== 1) return null;
+  const info = manifest.meetings[0];
+  const text = await native.readZipText(zipPath, `meetings/${info.uid}/${BUNDLE_FILE}`);
+  if (!text) return null;
+  const bundle = parseBundle(JSON.parse(text));
+  const media = info.files.find((f) => f.role === 'media') ?? info.files[0];
+  return {
+    zipPath,
+    kind: manifest.kind,
+    exportedBy: bundle.exportedBy ?? manifest.exportedBy ?? null,
+    bundle,
+    existing: await db.getMeetingByUid(bundle.meeting.uid),
+    recordingSize: media?.size ?? null,
+  };
+}
+
+// Choices from the import dialog for a single-meeting zip.
+export interface SharedImportOptions {
+  folderId: number | null; // null = Unsorted
+  speakerNames: Record<string, string>; // BundleSpeaker.key → name
+}
+
 // Unpacks the zip into a temporary directory under app data, imports folders
-// and meetings through the common importers, and moves media into place.
-export async function importZip(zipPath: string, onProgress?: (p: BackupProgress) => void): Promise<ZipImportResult> {
+// and meetings through the common importers, and moves media into place. With
+// `shared`, the (single) meeting goes into the chosen folder with its speakers
+// renamed, replacing an earlier import of it, and the zip's folders are ignored.
+export async function importZip(
+  zipPath: string,
+  onProgress?: (p: BackupProgress) => void,
+  shared?: SharedImportOptions,
+): Promise<ZipImportResult> {
   if (useBackup.getState().running) throw new Error('Another backup task is running.');
   useBackup.setState({ running: 'zip' });
   const dest = await tempDir('import');
@@ -782,7 +888,7 @@ export async function importZip(zipPath: string, onProgress?: (p: BackupProgress
     const result: ZipImportResult = { imported: 0, updated: 0, skipped: 0, folders: 0, failed: [] };
 
     const bundles: FolderBundle[] = [];
-    for (const f of folderFiles) {
+    for (const f of shared ? [] : folderFiles) {
       try {
         bundles.push(parseFolderBundle(JSON.parse(await readTextFile(await join(dest, ...f.split('/'))))));
       } catch (err) {
@@ -795,16 +901,29 @@ export async function importZip(zipPath: string, onProgress?: (p: BackupProgress
       const dir = await join(dest, 'meetings', dirName);
       let title = dirName;
       try {
-        const bundle = parseBundle(JSON.parse(await readTextFile(await join(dir, BUNDLE_FILE))));
+        let bundle = parseBundle(JSON.parse(await readTextFile(await join(dir, BUNDLE_FILE))));
         title = bundle.meeting.title;
         setProgress({ message: `Importing ${i + 1} of ${meetingDirs.length}: ${title}`, fraction: i / meetingDirs.length }, onProgress);
-        const res = await importBundle(bundle, null);
+        if (shared) {
+          const ex = await db.getMeetingByUid(bundle.meeting.uid);
+          if (ex && (ex.status === 'recording' || ex.status === 'processing')) throw new Error('This meeting is busy here; try again when it finishes.');
+          // The renames are this machine's edit, so newer than the sender's copy.
+          bundle = renameSharedSpeakers(bundle, shared.speakerNames);
+          bundle = { ...bundle, meeting: { ...bundle.meeting, updatedAt: nowIso() } };
+        }
+        const res = await importBundle(bundle, null, shared ? { force: true, folderId: shared.folderId } : {});
         if (res.status === 'skipped') {
           result.skipped++;
           continue;
         }
         res.status === 'imported' ? result.imported++ : result.updated++;
+        if (shared) {
+          // An earlier import may sit under another folder's directory.
+          if (res.status === 'updated') await syncMeetingDir(res.meetingId).catch(() => {});
+          if (baseFolder()) await ensureMeetingDir(res.meetingId).catch(() => null);
+        }
         await placeMedia(res.meetingId, dir, bundle);
+        result.meetingId = res.meetingId;
         emitMeetingChanged(res.meetingId);
       } catch (err) {
         result.failed.push({ title, error: errorMessage(err) });

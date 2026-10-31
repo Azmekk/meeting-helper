@@ -113,7 +113,7 @@ export function ApiKeyGuide({ provider }: { provider: ProviderId }) {
       <Steps steps={guide.steps} />
       <div className="grid gap-3 sm:grid-cols-2">
         {guide.notes.map((n) => (
-          <div key={n.title} className="rounded-lg bg-sunken/70 px-3.5 py-3 text-[12.5px] leading-relaxed">
+          <div key={n.title} className="rounded-2xl bg-fill px-4 py-3 text-[12.5px] leading-relaxed">
             <div className="mb-0.5 font-medium text-text">{n.title}</div>
             <div className="text-muted [&_a]:text-accent [&_a]:underline [&_b]:font-medium [&_b]:text-text">
               {n.body}

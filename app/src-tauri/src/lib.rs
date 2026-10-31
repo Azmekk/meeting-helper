@@ -6,6 +6,7 @@ mod remote;
 mod s3;
 mod secrets;
 mod upload;
+mod window_bounds;
 
 use tauri::Manager;
 
@@ -37,6 +38,7 @@ pub fn run() {
             // Phase 6: backup (zip + S3)
             bundle::export_zip,
             bundle::import_zip,
+            bundle::read_zip_text,
             s3::s3_test,
             s3::s3_list,
             s3::s3_put_file,
@@ -51,6 +53,7 @@ pub fn run() {
             remote::remote_status,
             remote::remote_pair,
             remote::remote_broadcast,
+            window_bounds::set_window_bounds,
         ])
         // The overlay would otherwise keep the app running after the main window closes.
         .on_window_event(|window, event| {
