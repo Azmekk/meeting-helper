@@ -6,11 +6,13 @@ import { create } from 'zustand';
 import { getSettings, useSettings } from './settings';
 
 const LATEST_RELEASE = 'https://api.github.com/repos/Azmekk/meeting-helper/releases/latest';
+// Where "Download" sends the user; the site links the right installer per platform.
+const DOWNLOAD_PAGE = 'https://meetinghelper.vexbyte.com/';
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 
 export interface UpdateInfo {
   version: string; // "0.2.0"
-  url: string; // release page, lists every installer
+  url: string; // download page on the website
   publishedAt: string;
 }
 
@@ -68,13 +70,13 @@ export async function checkForUpdate(manual = false): Promise<UpdateInfo | null>
       return null;
     }
     if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-    const release = (await res.json()) as { tag_name: string; html_url: string; published_at: string };
+    const release = (await res.json()) as { tag_name: string; published_at: string };
     const version = release.tag_name.replace(/^v/i, '');
 
     const skipped = !manual && getSettings().skippedVersion === version;
     const available =
       isNewer(version, current) && !skipped
-        ? { version, url: release.html_url, publishedAt: release.published_at }
+        ? { version, url: DOWNLOAD_PAGE, publishedAt: release.published_at }
         : null;
     const prev = useUpdate.getState().available;
     // Re-open the popup only for a version we haven't shown yet (or on a manual check).

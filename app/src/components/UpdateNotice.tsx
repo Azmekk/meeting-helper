@@ -9,7 +9,7 @@ function openRelease(url: string) {
   openUrl(url).catch((err) => toast(`Couldn't open the download page: ${errorMessage(err)}`, 'error'));
 }
 
-// "A new version is out" popup. It only links to the release; the user installs it.
+// "A new version is out" popup. It only links to the website; the user installs it.
 export function UpdateDialog() {
   const available = useUpdate((s) => s.available);
   const dismissed = useUpdate((s) => s.dismissed);
@@ -52,7 +52,7 @@ export function UpdateDialog() {
             You have {current ?? 'an older version'}.
           </p>
           <p className="text-muted">
-            Download opens the release page in your browser. Install the new version over this one; your meetings,
+            Download opens the Meeting Helper website in your browser. Install the new version over this one; your meetings,
             settings and API keys are kept.
           </p>
         </div>
