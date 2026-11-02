@@ -93,17 +93,16 @@ export async function deleteMeetingFiles(meetingId: number): Promise<void> {
 
 // Takes a finished OBS recording or a user-picked file: creates the meeting
 // (or fills in the row made when recording started), remuxes .mkv to .mp4 if
-// needed, probes duration, then starts transcription in the background if
-// `autoTranscribe` is on, it wasn't transcribed live and isn't deferred. Resolves with the
-// meeting id once the row is updated (before transcription finishes).
+// needed and probes duration. Never starts transcription: it costs money, so the
+// user starts it (the "Recording saved" dialog or the meeting page). Resolves
+// with the meeting id once the row is updated.
 // `fromRecording`: the file is our own OBS output, so the .mkv may be deleted
 // after remuxing (per the keepOriginalMkv setting). Never delete imported files.
 // `meetingId`: the 'recording' row to update instead of inserting a new one.
-// `deferTranscription`: never auto-transcribe; the caller asks the user (OBS recordings).
 export async function ingestMedia(
   path: string,
   title: string,
-  opts: { fromRecording?: boolean; deferTranscription?: boolean; meetingId?: number } = {},
+  opts: { fromRecording?: boolean; meetingId?: number } = {},
 ): Promise<number> {
   const settings = getSettings();
   const existing = opts.meetingId != null ? await db.getMeeting(opts.meetingId) : null;
@@ -175,13 +174,10 @@ export async function ingestMedia(
   await db.updateMeeting(id, { mediaPath, sourcePath, durationMs: info.durationMs });
   emitMeetingChanged(id);
 
-  // A recording transcribed live is already usable. Recordings are never
-  // transcribed automatically: obs.ts asks first (ProcessingDialog).
+  // A recording transcribed live is already usable.
   if (existing && (await db.hasLiveTranscript(id))) {
     await db.updateMeeting(id, { status: 'ready', error: null });
     emitMeetingChanged(id);
-  } else if (settings.autoTranscribe && !opts.deferTranscription) {
-    void transcribeMeeting(id);
   }
   return id;
 }

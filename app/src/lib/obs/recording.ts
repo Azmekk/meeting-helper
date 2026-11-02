@@ -264,7 +264,7 @@ async function recoverRecording(m: Meeting) {
   try {
     const file = await placeRecording(m.id, path);
     const title = (await db.getMeeting(m.id))?.title ?? m.title;
-    await ingestMedia(file, title, { fromRecording: true, deferTranscription: true, meetingId: m.id });
+    await ingestMedia(file, title, { fromRecording: true, meetingId: m.id });
     toast(`Recovered “${title}”, which was still recording when Meeting Helper closed.`, 'success');
     await offerFinished(m.id);
   } catch (err) {
@@ -333,7 +333,7 @@ async function handleFinishedRecording(path: string) {
       set({ lastIngest: { title, path: file, status: 'processing' } });
     }
 
-    const meetingId = await ingestMedia(file, title, { fromRecording: true, deferTranscription: true, meetingId: row?.id });
+    const meetingId = await ingestMedia(file, title, { fromRecording: true, meetingId: row?.id });
     set({ lastIngest: { title, path: file, status: 'done', meetingId } });
     toast(`“${title}” saved to Meetings.`, 'success');
     await offerFinished(meetingId);
@@ -400,7 +400,7 @@ export async function importExternalRecording(): Promise<void> {
   const title = defaultMeetingTitle(new Date(ext.startedAt));
   set({ lastIngest: { title, path, status: 'processing' } });
   try {
-    const meetingId = await ingestMedia(path, title, { fromRecording: true, deferTranscription: true });
+    const meetingId = await ingestMedia(path, title, { fromRecording: true });
     // Same as a row made when OBS started: no directory, but keep the chosen folder.
     const folderId = get().folderId;
     if (folderId != null && baseFolder() && (await db.getFolder(folderId))) {

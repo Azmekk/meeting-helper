@@ -97,7 +97,7 @@ The app tells you if ffmpeg or OBS is missing, and when a new version is out.
 
 ### Importing a recording
 
-**Meetings → Import recording** and pick any audio or video file. To compare providers, open the meeting and use **Transcribe with… → the other provider**; both transcripts are kept.
+**Meetings → Import recording** and pick any audio or video file. Nothing is sent or charged until you choose a provider on the meeting page. To compare providers, open the meeting and use **Transcribe with… → the other provider**; both transcripts are kept.
 
 ## Cost
 

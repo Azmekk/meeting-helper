@@ -352,7 +352,7 @@ function MeetingRow({
             Retry
           </Button>
         )}
-        {/* Left untranscribed ("Not now" after recording, or autoTranscribe off). */}
+        {/* Not transcribed yet (imported, or "Not now" after recording). */}
         {m.status === 'queued' && !active && !!m.mediaPath && (
           <Button size="sm" variant="secondary" icon={Sparkles} loading={retrying} onClick={retry}>
             Transcribe

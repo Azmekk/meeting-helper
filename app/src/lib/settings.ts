@@ -17,8 +17,6 @@ export interface Settings {
   // mic doesn't also pick up the other people). Falls back to a single mixed
   // track automatically if the recording has only one audio track.
   splitTracks: boolean;
-  // Start transcription as soon as a recording stops / a file is imported.
-  autoTranscribe: boolean;
   // After remuxing an OBS .mkv to .mp4, keep the .mkv too.
   keepOriginalMkv: boolean;
   // '' = use ffmpeg/ffprobe from PATH; otherwise the full path to ffmpeg.exe.
@@ -95,7 +93,6 @@ export const DEFAULT_SETTINGS: Settings = {
   terms: [],
   selfName: 'Me',
   splitTracks: true,
-  autoTranscribe: true,
   keepOriginalMkv: false,
   ffmpegPath: '',
   obsHost: '127.0.0.1',

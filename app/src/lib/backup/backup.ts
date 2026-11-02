@@ -72,7 +72,7 @@ async function runBackup(onProgress?: (p: BackupProgress) => void): Promise<Back
   const planned: PlannedMeeting[] = [];
   for (const meeting of await db.listMeetings()) {
     // Recording/transcribing meetings go in a later backup, once settled.
-    // 'queued' with media is settled (untranscribed, autoTranscribe off).
+    // 'queued' with media is settled (the user hasn't transcribed it).
     const settled = meeting.status === 'ready' || meeting.status === 'error' || (meeting.status === 'queued' && !!meeting.mediaPath);
     if (!settled) continue;
     const prev = states.get(meeting.uid) ?? null;
@@ -192,7 +192,7 @@ async function runAuto(): Promise<void> {
   if (!getSettings().backupAuto || !(await isBackupConfigured())) return;
   // Never compete with a recording (disk and network) or a transcription.
   // 'queued' without media is mid-import; with media it just isn't transcribed
-  // (autoTranscribe off) and may stay that way forever.
+  // and may stay that way forever.
   const busy = (await db.listMeetings()).some(
     (m) => m.status === 'recording' || m.status === 'processing' || (m.status === 'queued' && !m.mediaPath),
   );

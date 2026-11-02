@@ -50,16 +50,6 @@ export function RecordingSection() {
             />
           </SettingRow>
           <SettingRow
-            title="Transcribe automatically"
-            description="Start transcribing as soon as a recording stops or a file is imported."
-          >
-            <Switch
-              label="Transcribe automatically"
-              checked={s.autoTranscribe}
-              onChange={(v) => saveSettings({ autoTranscribe: v })}
-            />
-          </SettingRow>
-          <SettingRow
             title="Keep the original MKV"
             description="OBS recordings are converted to MP4 for playback. Turn this on to keep the original .mkv file as well."
           >
