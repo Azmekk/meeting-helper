@@ -724,13 +724,14 @@ export default function MeetingScreen() {
 
           {detail && (
             <div className={clsx(tab !== 'transcript' && 'hidden')}>
-              <div className="surface sticky top-2 z-20 mb-3 flex items-center gap-3 rounded-full py-1.5 pr-2 pl-4">
+              {/* Follow playback wraps to a second row when the column is too narrow. */}
+              <div className="surface sticky top-2 z-20 mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[22px] py-1.5 pr-2 pl-4">
                 <div className="text-[13px] whitespace-nowrap text-muted">
                   {segmentCount} segment{segmentCount === 1 ? '' : 's'}
                 </div>
-                <div className="ml-auto flex items-center gap-3">
-                  <div className="flex items-center gap-1">
-                    <div className="relative">
+                <div className="ml-auto flex max-w-full min-w-0 flex-auto flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                  <div className="flex max-w-full min-w-0 flex-[1_1_16rem] items-center justify-end gap-1">
+                    <div className="relative max-w-60 min-w-0 flex-1">
                       <Search size={14} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted" />
                       <Input
                         ref={findRef}
@@ -749,7 +750,7 @@ export default function MeetingScreen() {
                         }}
                         placeholder="Search this meeting"
                         title="Ctrl+F · Enter for next, Shift+Enter for previous"
-                        className="h-8 w-60 pr-[4.5rem] pl-8.5 text-[13px] [&::-webkit-search-cancel-button]:hidden"
+                        className="h-8 w-full pr-[4.5rem] pl-8.5 text-[13px] [&::-webkit-search-cancel-button]:hidden"
                       />
                       {query.trim() && (
                         <span className="absolute top-1/2 right-7 -translate-y-1/2 text-xs text-muted tabular-nums">
@@ -787,7 +788,7 @@ export default function MeetingScreen() {
                   </div>
                   {meeting.mediaPath && (
                     <>
-                      <label className="flex cursor-pointer items-center gap-2 text-[13px] text-muted">
+                      <label className="flex cursor-pointer items-center gap-2 text-[13px] whitespace-nowrap text-muted">
                         <Switch checked={follow} onChange={setFollow} label="Follow playback" />
                         Follow playback
                       </label>

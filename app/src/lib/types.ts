@@ -131,7 +131,8 @@ export interface ChatMessage {
 
 // ---------- Folder AI (progress tracking, extraction) ----------
 
-export type ActionItemStatus = 'open' | 'done' | 'dropped';
+// 'suggested': the AI found it but it isn't a firm commitment; waits for the user to accept.
+export type ActionItemStatus = 'suggested' | 'open' | 'done' | 'dropped';
 
 // A task tracked across a folder's meetings. `meetingId`/`sourceMs` point at
 // where it first came up; `lastUpdateMeeting` at the meeting that last changed it.

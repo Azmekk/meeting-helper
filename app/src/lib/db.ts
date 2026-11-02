@@ -1175,6 +1175,7 @@ const ACTION_ITEM_COLUMNS: Record<string, string> = {
   text: 'text',
   owner: 'owner',
   status: 'status',
+  firstSeenMeeting: 'first_seen_meeting',
   lastUpdateMeeting: 'last_update_meeting',
   sourceMs: 'source_ms',
   meetingId: 'meeting_id',
@@ -1182,7 +1183,7 @@ const ACTION_ITEM_COLUMNS: Record<string, string> = {
 
 export async function updateActionItem(
   id: number,
-  patch: Partial<Pick<ActionItem, 'text' | 'owner' | 'status' | 'lastUpdateMeeting' | 'sourceMs' | 'meetingId'>>,
+  patch: Partial<Pick<ActionItem, 'text' | 'owner' | 'status' | 'firstSeenMeeting' | 'lastUpdateMeeting' | 'sourceMs' | 'meetingId'>>,
 ): Promise<void> {
   const sets: string[] = [];
   const params: unknown[] = [];

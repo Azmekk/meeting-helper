@@ -87,8 +87,9 @@ export function MeetingHeader({
         Meetings
       </Link>
 
+      {/* The actions wrap below a title that doesn't fit next to them, instead of truncating it early. */}
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
-        <div className="min-w-0 flex-1">
+        <div className="max-w-full min-w-0 flex-auto">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted">
             {(folders.length > 0 || meeting.folderId != null) && (
               <label className="-ml-1 inline-flex items-center gap-1" title="Folder">
@@ -146,14 +147,14 @@ export function MeetingHeader({
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex max-w-full flex-wrap items-center gap-2">
           {transcripts.length > 0 && (
             <Select
               aria-label="Transcript"
               title="Which transcript to show"
               value={activeTranscript?.id ?? ''}
               onChange={(e) => onSelectTranscript(Number(e.target.value))}
-              className="w-auto max-w-md"
+              className="w-auto max-w-[min(100%,28rem)]"
             >
               {transcripts.map((t) => (
                 <option key={t.id} value={t.id}>

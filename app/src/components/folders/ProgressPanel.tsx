@@ -1,17 +1,17 @@
 // Folder action items: tracked across meetings, updated by the reconcile step
 // after each meeting, editable by hand.
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
-import { Check, Circle, Pencil, Plus, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
+import { Check, ChevronDown, Circle, Pencil, Plus, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Badge, Button, Callout, Card, IconButton, Input, Select, Spinner, clsx, errorMessage, toast } from '../ui';
+import { Badge, Button, Callout, Card, Collapse, IconButton, Input, Select, Spinner, clsx, errorMessage, toast } from '../ui';
 import { useAiKey } from '../meeting/AiPanels';
 import * as db from '../../lib/db';
 import { reconcileActionItems, runInFolderQueue, useFolderAi } from '../../lib/ai/folder';
 import { formatDate, formatTimestamp, formatUsd } from '../../lib/format';
 import type { ActionItem, ActionItemStatus, Folder, Meeting } from '../../lib/types';
 
-const STATUS_LABEL: Record<ActionItemStatus, string> = { open: 'Open', done: 'Done', dropped: 'Dropped' };
+const STATUS_LABEL: Record<ActionItemStatus, string> = { suggested: 'Suggested', open: 'Open', done: 'Done', dropped: 'Dropped' };
 
 export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: Meeting[] }) {
   const hasKey = useAiKey();
@@ -20,6 +20,7 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
   const [filter, setFilter] = useState<'open' | 'all'>('open');
   const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [running, setRunning] = useState(false);
+  const [showSuggested, setShowSuggested] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -52,7 +53,7 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
     setError(null);
     try {
       const r = await runInFolderQueue(folder.id, () => reconcileActionItems(folder.id, latest.id));
-      toast(`Action items updated: ${r.updated} changed, ${r.added} new (${formatUsd(r.costUsd)})`, 'success');
+      toast(`Action items updated: ${r.updated} changed, ${r.added} new, ${r.suggested} suggested (${formatUsd(r.costUsd)})`, 'success');
       load();
     } catch (err) {
       setError(errorMessage(err));
@@ -92,6 +93,16 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
     }
   };
 
+  // Accepted items are the user's now: not replaced when the AI re-runs a meeting.
+  const accept = async (item: ActionItem) => {
+    try {
+      await db.updateActionItem(item.id, { status: 'open', firstSeenMeeting: null });
+      load();
+    } catch (err) {
+      toast(`Couldn't update: ${errorMessage(err)}`, 'error');
+    }
+  };
+
   const remove = async (item: ActionItem) => {
     try {
       await db.deleteActionItem(item.id);
@@ -108,19 +119,21 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
       </div>
     );
   }
-  const shown = filter === 'open' ? items.filter((i) => i.status === 'open') : items;
-  const openCount = items.filter((i) => i.status === 'open').length;
+  const tracked = items.filter((i) => i.status !== 'suggested');
+  const suggested = items.filter((i) => i.status === 'suggested');
+  const shown = filter === 'open' ? tracked.filter((i) => i.status === 'open') : tracked;
+  const openCount = tracked.filter((i) => i.status === 'open').length;
 
   return (
     <Card
       title="Progress"
-      description={autoBusy ?? 'Action items across the folder. Each new meeting marks items done or dropped and adds new ones.'}
+      description={autoBusy ?? 'Action items across the folder. Each new meeting marks items done or dropped and adds clear commitments; anything less certain waits under Suggested.'}
       actions={
         <>
           <AiLanguageSelect className="h-7" />
           <Select value={filter} onChange={(e) => setFilter(e.target.value as 'open' | 'all')} className="h-7 w-auto text-[13px]">
             <option value="open">Open ({openCount})</option>
-            <option value="all">All ({items.length})</option>
+            <option value="all">All ({tracked.length})</option>
           </Select>
           <Button
             size="sm"
@@ -189,6 +202,41 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
         <p className="px-5 py-6 text-center text-[13px] text-muted">
           {items.length ? 'Nothing open. Nice.' : 'No action items yet. They appear after a meeting in this folder gets its summary, or add one by hand.'}
         </p>
+      )}
+      {suggested.length > 0 && (
+        <div className="border-t border-line">
+          <button
+            type="button"
+            aria-expanded={showSuggested}
+            onClick={() => setShowSuggested((v) => !v)}
+            className="flex w-full items-center gap-2 px-5 py-2.5 text-left text-[13px] font-medium text-muted transition-colors hover:text-text"
+          >
+            <ChevronDown size={14} className={clsx('shrink-0 transition-transform', !showSuggested && '-rotate-90')} />
+            Suggested ({suggested.length})
+            <span className="min-w-0 truncate font-normal text-faint">Not firm commitments. Accept the ones you want to track.</span>
+          </button>
+          <Collapse open={showSuggested}>
+            <ul className="divide-y divide-line border-t border-line">
+              {suggested.map((item) => (
+                <li key={item.id} className="flex items-start gap-3 px-5 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm">
+                      {item.owner && <span className="mr-1.5 font-semibold">{item.owner}:</span>}
+                      {item.text}
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-faint">
+                      <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" />
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center">
+                    <IconButton size="sm" icon={Check} label="Accept" onClick={() => accept(item)} className="hover:text-ok" />
+                    <IconButton size="sm" icon={X} label="Dismiss" onClick={() => remove(item)} />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </Collapse>
+        </div>
       )}
       <div className="border-t border-line px-5 py-2.5">
         <Button size="sm" variant="ghost" icon={Plus} onClick={() => setEditing('new')} disabled={editing === 'new'}>

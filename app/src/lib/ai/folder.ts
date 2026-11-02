@@ -7,6 +7,7 @@ import { toast } from '../toast';
 import * as db from '../db';
 import { formatDate, formatDuration, formatTimestamp } from '../format';
 import { getSettings } from '../settings';
+import { type ItemEvidence, normalizeForQuote, triageItem } from './triage';
 import type { ActionItem, ActionItemStatus, AiDoc, ChatMessage, ExtractionTemplate, Folder, Meeting } from '../types';
 import { estimateCost, runAi, type AiResult, type AiTool, type AiToolCall } from './index';
 import {
@@ -174,7 +175,9 @@ async function saveFolderSummary(folderId: number, result: AiResult, state: (s: 
 
 const RECONCILE_ROLE = `You track action items across a series of meetings. You get the currently open items and one new meeting (summary and transcript).
 - For each open item the new meeting says something about, return an update: "done" when it was completed, "dropped" when it was cancelled or is no longer relevant, "open" when it is still pending but its wording or owner should change. Give the new text/owner, or null to keep them. Leave items the meeting doesn't mention out of "updates".
-- Add new commitments and tasks from the meeting as new_items, with the owner when the transcript makes it clear and the id of the transcript line where it came up. Don't add duplicates of open items.
+- Report anything new from the meeting that someone may need to act on as new_items, with the owner when the transcript makes it clear and the id of the transcript line where it came up. Don't judge importance, but leave out topics that were only discussed. Merge steps of the same piece of work into one item. Don't add duplicates of open items or earlier suggestions, unless the meeting turns a suggestion into a commitment.
+- Classify each new item by what was actually said. "commitment": a person clearly said they will do it. "request": someone asked a person to do it; set accepted to true only if that person agreed. "suggestion": an idea or a "we should" that nobody took on.
+- Give the words that show this as quote: copied exactly from one transcript line, in the language spoken, never translated or paraphrased.
 - Keep item texts short and concrete (a task, not a sentence about the meeting).`;
 
 const RECONCILE_SCHEMA = {
@@ -201,10 +204,13 @@ const RECONCILE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['text', 'owner', 'segment_id'],
+        required: ['text', 'owner', 'kind', 'accepted', 'quote', 'segment_id'],
         properties: {
           text: { type: 'string' },
           owner: { type: ['string', 'null'] },
+          kind: { type: 'string', enum: ['commitment', 'request', 'suggestion'] },
+          accepted: { type: 'boolean', description: 'For a request: did the person asked agree? Otherwise false' },
+          quote: { type: 'string', description: 'Exact words from the transcript, untranslated' },
           segment_id: { type: ['integer', 'null'], description: 'Transcript line id where it came up' },
         },
       },
@@ -214,12 +220,13 @@ const RECONCILE_SCHEMA = {
 
 interface ReconcileOutput {
   updates: { id: number; status: ActionItemStatus; text: string | null; owner: string | null }[];
-  new_items: { text: string; owner: string | null; segment_id: number | null }[];
+  new_items: (ItemEvidence & { text: string; owner: string | null; segment_id: number | null })[];
 }
 
 export interface ReconcileResult {
   updated: number;
   added: number;
+  suggested: number;
   costUsd: number | null;
 }
 
@@ -231,7 +238,10 @@ function itemLine(a: ActionItem): string {
 export async function reconcileActionItems(folderId: number, meetingId: number, opts: FolderAiOptions = {}): Promise<ReconcileResult> {
   const folder = await requireFolder(folderId);
   const ctx = await loadMeetingContext(meetingId);
-  const open = (await db.listActionItems(folderId)).filter((a) => a.status === 'open' && a.meetingId !== meetingId);
+  // Items this meeting's previous run added get replaced below, so they don't count.
+  const existing = (await db.listActionItems(folderId)).filter((a) => a.firstSeenMeeting !== meetingId);
+  const open = existing.filter((a) => a.status === 'open');
+  const suggestions = existing.filter((a) => a.status === 'suggested');
   const summary = await meetingSummaryText(ctx.meeting);
 
   const result = await runAi('summary', {
@@ -242,6 +252,7 @@ export async function reconcileActionItems(folderId: number, meetingId: number, 
         role: 'user',
         content:
           `Open action items in "${folder.name}":\n${open.map(itemLine).join('\n') || '(none)'}\n\n` +
+          (suggestions.length ? `Earlier suggestions (no updates for these):\n${suggestions.map((a) => `- ${a.text}`).join('\n')}\n\n` : '') +
           (summary ? `Summary of this meeting:\n${summary}\n\n` : '') +
           'Return the updates and new items as JSON.',
       },
@@ -270,24 +281,28 @@ export async function reconcileActionItems(folderId: number, meetingId: number, 
     updated++;
   }
   const startOf = new Map(ctx.detail.segments.map((s) => [s.id, s.startMs]));
+  const spoken = normalizeForQuote(ctx.detail.segments.map((s) => s.text).join(' '));
   let added = 0;
+  let suggested = 0;
   for (const n of out.new_items) {
     const text = n.text?.trim();
     if (!text) continue;
+    const status = triageItem(n, spoken);
     await db.addActionItem({
       folderId,
       meetingId,
       text,
       owner: n.owner?.trim() || null,
-      status: 'open',
+      status,
       firstSeenMeeting: meetingId,
       lastUpdateMeeting: meetingId,
       sourceMs: n.segment_id != null ? (startOf.get(n.segment_id) ?? null) : null,
     });
-    added++;
+    if (status === 'open') added++;
+    else suggested++;
   }
   await updateFolderState(folderId, (s) => ({ ...s, progressMeetings: addId(s.progressMeetings, meetingId) }));
-  return { updated, added, costUsd: costOf(result) };
+  return { updated, added, suggested, costUsd: costOf(result) };
 }
 
 // ---------- Extraction ----------

@@ -4,9 +4,9 @@ import { AiLanguageSelect } from '../ai/AiLanguageSelect';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { Download, Pencil, Play, Plus, Square, Table2, Trash2, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Button, Callout, Card, EmptyState, IconButton, Input, Modal, Select, Spinner, errorMessage, toast } from '../ui';
+import { Button, Callout, Card, EmptyState, IconButton, Input, Modal, Select, Spinner, clsx, errorMessage, toast } from '../ui';
 import { useAbortable, useAiKey } from '../meeting/AiPanels';
 import * as db from '../../lib/db';
 import { runExtraction, runInFolderQueue, useFolderAi } from '../../lib/ai/folder';
@@ -245,11 +245,14 @@ export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: M
                       </Link>
                       <div className="text-xs text-faint">{formatDate(m.createdAt)}</div>
                     </td>
-                    {template.fields.map((f) => (
-                      <td key={f.name} className="max-w-xs px-4 py-2">
-                        {row ? (row.values[f.name] ?? <span className="text-faint">—</span>) : <span className="text-faint italic">not run</span>}
-                      </td>
-                    ))}
+                    {template.fields.map((f) => {
+                      const value = row?.values[f.name];
+                      return (
+                        <td key={f.name} className="max-w-xs px-4 py-2">
+                          {row ? value ? <ClampedText text={value} /> : <span className="text-faint">—</span> : <span className="text-faint italic">not run</span>}
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
               })}
@@ -279,6 +282,36 @@ export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: M
         </p>
       </Modal>
     </Card>
+  );
+}
+
+// A table cell's value: long ones show a few lines with a toggle for the rest.
+function ClampedText({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [clipped, setClipped] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    const check = () => setClipped(el.scrollHeight > el.clientHeight + 1);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text, open]);
+
+  return (
+    <>
+      <div ref={ref} className={clsx(!open && 'line-clamp-4')}>
+        {text}
+      </div>
+      {(clipped || open) && (
+        <button type="button" onClick={() => setOpen((v) => !v)} className="mt-1 text-xs font-medium text-accent-ink hover:underline">
+          {open ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </>
   );
 }
 
