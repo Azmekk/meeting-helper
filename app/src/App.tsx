@@ -11,7 +11,7 @@ import { initDb } from './lib/db';
 import { initLive } from './lib/live';
 import { initRemote } from './lib/remote';
 import { initRecorder, useRecorder } from './lib/obs';
-import { useJobs } from './lib/pipeline';
+import { failInterruptedJobs, initJobCloseGuard, useJobs } from './lib/pipeline';
 import { useSettings } from './lib/settings';
 import { initUpdateCheck } from './lib/updates';
 import { initFolderAi } from './lib/ai/folder';
@@ -36,6 +36,8 @@ export default function App() {
         await useSettings.getState().load();
         initAppearance();
         await initDb();
+        await failInterruptedJobs();
+        initJobCloseGuard();
         initRecorder();
         initLive();
         initRemote();

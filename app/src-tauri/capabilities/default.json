@@ -10,6 +10,7 @@
     "core:webview:allow-create-webview-window",
     "core:window:allow-set-content-protected",
     "core:window:allow-close",
+    "core:window:allow-destroy",
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-unminimize",

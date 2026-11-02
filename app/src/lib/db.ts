@@ -481,6 +481,12 @@ export async function listRecordingMeetings(): Promise<Meeting[]> {
   return rows.map(toMeeting);
 }
 
+// Meetings still marked 'processing'.
+export async function listProcessingMeetings(): Promise<Meeting[]> {
+  const rows = await conn().select<MeetingRow[]>("SELECT * FROM meetings WHERE status = 'processing'");
+  return rows.map(toMeeting);
+}
+
 // Deletes the meeting with all transcripts/speakers/segments and its AI data.
 // Does not touch files on disk (see deleteMeetingFiles in pipeline.ts).
 export async function deleteMeeting(id: number): Promise<void> {

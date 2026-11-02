@@ -1,6 +1,8 @@
 // Media ingest and transcription jobs: everything between "a file exists" and
 // "the meeting has a transcript".
 import { appDataDir, join } from '@tauri-apps/api/path';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { ask } from '@tauri-apps/plugin-dialog';
 import { exists, mkdir, remove } from '@tauri-apps/plugin-fs';
 import { create } from 'zustand';
 import { errorMessage } from './errors';
@@ -284,6 +286,49 @@ export async function transcribeMeeting(meetingId: number, providerId?: Provider
     running.delete(meetingId);
     emitMeetingChanged(meetingId);
   }
+}
+
+// A job only lives in this page, so a 'processing' row with no job here was cut
+// off by a close or reload. Fails it so the meeting can be retried, and removes
+// the audio it left behind. Called once at startup, after initDb.
+export async function failInterruptedJobs(): Promise<void> {
+  try {
+    for (const m of await db.listProcessingMeetings()) {
+      if (running.has(m.id)) continue;
+      await db.updateMeeting(m.id, {
+        status: 'error',
+        error:
+          'Meeting Helper closed or reloaded before this transcription finished. ' +
+          'Audio already uploaded may still be with the transcription provider.',
+      });
+      const workDir = await join(await appDataDir(), 'meetings', String(m.id), 'work');
+      if (await exists(workDir)) await remove(workDir, { recursive: true }).catch(() => {});
+      toast(`Transcription of “${m.title}” was interrupted. Open the meeting to retry.`, 'error');
+    }
+  } catch (err) {
+    console.warn('Could not check for interrupted transcriptions', err);
+  }
+}
+
+let closeGuardSet = false;
+
+// Asks before a close or reload would cut off a running transcription.
+export function initJobCloseGuard(): void {
+  if (closeGuardSet) return;
+  closeGuardSet = true;
+  void getCurrentWindow().onCloseRequested(async (event) => {
+    if (!running.size) return;
+    const leave = await ask('A transcription is still running. If you close Meeting Helper now, it will be lost and you will have to start it again.', {
+      title: 'Close while transcribing?',
+      kind: 'warning',
+      okLabel: 'Close anyway',
+      cancelLabel: 'Keep running',
+    }).catch(() => true);
+    if (!leave) event.preventDefault();
+  });
+  window.addEventListener('beforeunload', (event) => {
+    if (running.size) event.preventDefault();
+  });
 }
 
 // Turns provider results into the speakers/segments db.createTranscript wants.
