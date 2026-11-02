@@ -7,7 +7,7 @@ import { getSecret } from '../secrets';
 import { getSettings } from '../settings';
 import type { AiDoc, ChatMessage, Folder, Meeting, TranscriptDetail } from '../types';
 import { estimateCost, getAiProvider, roughTokens, runAi, type AiMessage, type AiResult } from './index';
-import { CITATION_RULES, formatTranscript, languageInstruction, toPromptLines } from './prompts';
+import { CITATION_RULES, formatTranscript, languageInstruction, normalizeCitations, toPromptLines } from './prompts';
 
 export interface MeetingAiOptions {
   signal?: AbortSignal;
@@ -52,6 +52,11 @@ export async function loadMeetingContext(meetingId: number): Promise<MeetingCont
   }
   const folder = meeting.folderId != null ? await db.getFolder(meeting.folderId) : null;
   return { meeting, folder, detail, transcript };
+}
+
+function knownSegment(ctx: MeetingContext): (id: number) => boolean {
+  const ids = new Set(ctx.detail.segments.map((s) => s.id));
+  return (id) => ids.has(id);
 }
 
 // The user's "who I am / context / goals" notes, folder first, then meeting.
@@ -100,8 +105,7 @@ Rules:
 - Speaker labels like "Speaker 2" are not names; refer to them as written unless the transcript reveals a name.
 - No tables, no preamble before the first heading, no closing remarks.`;
 
-// Generates and stores the meeting summary (one per meeting; regenerating
-// replaces it).
+// Generates and stores a meeting summary. Earlier ones stay in its history.
 export async function summarizeMeeting(meetingId: number, opts: MeetingAiOptions = {}): Promise<AiDoc> {
   const ctx = await loadMeetingContext(meetingId);
   const result = await runAi(
@@ -116,7 +120,7 @@ export async function summarizeMeeting(meetingId: number, opts: MeetingAiOptions
     },
     { onText: (_delta, text) => opts.onText?.(text) },
   );
-  const content = result.text.trim();
+  const content = normalizeCitations(result.text.trim(), knownSegment(ctx));
   if (!content) throw new Error(result.stopReason === 'refusal' ? 'The model declined to summarise this meeting.' : 'The model returned an empty summary.');
   const doc = await db.saveAiDoc({
     scope: 'meeting',
@@ -225,11 +229,12 @@ export async function askMeeting(meetingId: number, question: string, opts: Meet
       messages: toAiMessages(history, q),
       maxTokens: 8000,
       effort: 'normal',
+      model: opts.model || undefined,
       signal: opts.signal,
     },
     { onText: (_delta, text) => opts.onText?.(text) },
   );
-  const text = result.text.trim();
+  const text = normalizeCitations(result.text.trim(), knownSegment(ctx));
   if (!text) throw new Error(result.stopReason === 'refusal' ? 'The model declined to answer.' : 'The model returned an empty answer.');
   const saved = await db.addChatMessage('meeting', meetingId, 'user', q);
   const answer = await db.addChatMessage('meeting', meetingId, 'assistant', text + truncationNote(result));

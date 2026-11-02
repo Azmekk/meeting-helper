@@ -475,7 +475,8 @@ export async function writeMeetingSidecar(meetingId: number): Promise<void> {
     : null;
   await writeOrRemove(await join(meeting.dirPath, 'transcript.md'), transcriptMd);
 
-  const summary = bundle.aiDocs.find((d) => d.kind === 'summary');
+  // Oldest first, so the last one is the newest.
+  const summary = bundle.aiDocs.filter((d) => d.kind === 'summary').pop();
   const startMs = new Map<number, number>();
   for (const t of bundle.transcripts) for (const s of t.segments) startMs.set(s.id, s.startMs);
   const summaryMd = summary ? `# ${meeting.title}\n\n${citationsToTimes(summary.content, startMs).trim()}\n` : null;

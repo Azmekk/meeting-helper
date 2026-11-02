@@ -35,33 +35,44 @@ export function toPromptLines(
 export const CITATION_RULES =
   'Each transcript line starts with [#<id> <time> <speaker>]. When you state something from the transcript, ' +
   'cite the line(s) it comes from as [#<id>], e.g. "The launch moved to May [#123]." or "[#123][#140]". ' +
+  'Always include the # and give each id its own brackets; for a run of lines, cite the first and the last, never a range like [#123-140]. ' +
   'Use only ids that appear in the transcript, and never cite times or speakers in place of ids.';
 
 export type CitationPart = { type: 'text'; text: string } | { type: 'cite'; segId: number };
 
-// Matches [#12], [#12, #15], [#12,15] and [#12; #15].
-const CITE_RE = /\[#(\d+(?:\s*[,;]\s*#?\d+)*)\]/g;
+// Matches [#12], [#12, #15], [#12,15] and [#12; #15], plus what some models
+// write despite the rules: ranges ([#12-15]) and a missing # ([12], [12-15]).
+const CITE_RE = /\[(#?)(\d+(?:\s*[-–—,;]\s*#?\d+)*)\]/g;
 
 // Splits model text into plain text and citation parts for click-to-seek links.
-export function parseCitations(text: string): CitationPart[] {
+// A range becomes its first and last line. Without a # the brackets could be
+// anything (e.g. [2024]), so they only count when `isKnown` accepts every id.
+export function parseCitations(text: string, isKnown?: (id: number) => boolean): CitationPart[] {
   const parts: CitationPart[] = [];
   let last = 0;
   for (const m of text.matchAll(CITE_RE)) {
+    const ids = m[2].split(/[-–—,;]/).map((id) => Number(id.trim().replace(/^#/, '')));
+    if (!m[1] && !(isKnown && ids.every(isKnown))) continue;
     const at = m.index ?? 0;
     if (at > last) parts.push({ type: 'text', text: text.slice(last, at) });
-    for (const id of m[1].split(/[,;]/)) {
-      const n = Number(id.trim().replace(/^#/, ''));
-      if (Number.isFinite(n)) parts.push({ type: 'cite', segId: n });
-    }
+    for (const n of ids) parts.push({ type: 'cite', segId: n });
     last = at + m[0].length;
   }
   if (last < text.length) parts.push({ type: 'text', text: text.slice(last) });
   return parts;
 }
 
-// All cited segment ids, e.g. to check citations exist before rendering.
+// All possibly cited segment ids, e.g. to look them up before rendering.
 export function citedIds(text: string): number[] {
-  return parseCitations(text).flatMap((p) => (p.type === 'cite' ? [p.segId] : []));
+  return parseCitations(text, () => true).flatMap((p) => (p.type === 'cite' ? [p.segId] : []));
+}
+
+// Rewrites whatever form a model used to the standard [#id], so stored text
+// works everywhere (exports, imports), not only on screen.
+export function normalizeCitations(text: string, isKnown: (id: number) => boolean): string {
+  return parseCitations(text, isKnown)
+    .map((p) => (p.type === 'cite' ? `[#${p.segId}]` : p.text))
+    .join('');
 }
 
 export function languageName(code: string): string {

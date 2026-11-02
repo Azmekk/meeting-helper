@@ -1,6 +1,7 @@
 // Folder action items: tracked across meetings, updated by the reconcile step
 // after each meeting, editable by hand.
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
+import { AiModelSelect, useAiModel } from '../ai/AiModelSelect';
 import { Check, ChevronDown, Circle, Pencil, Plus, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -15,6 +16,7 @@ const STATUS_LABEL: Record<ActionItemStatus, string> = { suggested: 'Suggested',
 
 export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: Meeting[] }) {
   const hasKey = useAiKey();
+  const [model, setModel] = useAiModel();
   const autoBusy = useFolderAi((s) => s.busy[folder.id]);
   const [items, setItems] = useState<ActionItem[] | null>(null);
   const [filter, setFilter] = useState<'open' | 'all'>('open');
@@ -52,7 +54,7 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
     setRunning(true);
     setError(null);
     try {
-      const r = await runInFolderQueue(folder.id, () => reconcileActionItems(folder.id, latest.id));
+      const r = await runInFolderQueue(folder.id, () => reconcileActionItems(folder.id, latest.id, { model }));
       toast(`Action items updated: ${r.updated} changed, ${r.added} new, ${r.suggested} suggested (${formatUsd(r.costUsd)})`, 'success');
       load();
     } catch (err) {
@@ -131,6 +133,7 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
       actions={
         <>
           <AiLanguageSelect className="h-7" />
+          <AiModelSelect value={model} onChange={setModel} disabled={running} className="h-7" />
           <Select value={filter} onChange={(e) => setFilter(e.target.value as 'open' | 'all')} className="h-7 w-auto text-[13px]">
             <option value="open">Open ({openCount})</option>
             <option value="all">All ({tracked.length})</option>

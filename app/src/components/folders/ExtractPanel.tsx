@@ -1,6 +1,7 @@
 // Custom extraction: the user defines fields, the AI fills them per meeting
 // (structured output), results show as a table with CSV export.
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
+import { AiModelSelect, useAiModel } from '../ai/AiModelSelect';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { Download, Pencil, Play, Plus, Square, Table2, Trash2, X } from 'lucide-react';
@@ -32,6 +33,7 @@ export function toCsv(template: ExtractionTemplate, meetings: Meeting[], rows: M
 
 export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: Meeting[] }) {
   const hasKey = useAiKey();
+  const [model, setModel] = useAiModel();
   const autoBusy = useFolderAi((s) => s.busy[folder.id]);
   const [templates, setTemplates] = useState<ExtractionTemplate[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
@@ -86,7 +88,7 @@ export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: M
         runExtraction(
           template.id,
           targets.map((m) => m.id),
-          { signal, onStep: (done, total) => setProgress({ done, total }) },
+          { signal, model, onStep: (done, total) => setProgress({ done, total }) },
         ),
       );
       loadRows();
@@ -204,6 +206,7 @@ export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: M
         ) : (
           <>
             <AiLanguageSelect />
+            <AiModelSelect value={model} onChange={setModel} />
             <Button size="sm" icon={Play} disabled={!hasKey || !missing.length || !!autoBusy} onClick={() => run(missing)}>
               Run on new ({missing.length})
             </Button>

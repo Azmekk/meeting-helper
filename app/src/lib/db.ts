@@ -897,7 +897,10 @@ async function touchOwner(scope: AiScope, ownerId: number): Promise<void> {
   else await touchFolder(ownerId);
 }
 
-// Keeps one doc per (scope, owner, kind): a regenerated summary replaces the old one.
+// Summaries keep their history until the user deletes them; other kinds hold
+// one doc per (scope, owner, kind), so a new one replaces the old.
+const KEEPS_HISTORY: AiDocKind[] = ['summary', 'folder_summary'];
+
 export async function saveAiDoc(doc: {
   scope: AiScope;
   ownerId: number;
@@ -915,16 +918,33 @@ export async function saveAiDoc(doc: {
   );
   if (res.lastInsertId == null) throw new Error('saveAiDoc: no id returned');
   const id = Number(res.lastInsertId);
-  await d.execute('DELETE FROM ai_docs WHERE scope = $1 AND owner_id = $2 AND kind = $3 AND id <> $4', [
-    doc.scope,
-    doc.ownerId,
-    doc.kind,
-    id,
-  ]);
+  if (!KEEPS_HISTORY.includes(doc.kind)) {
+    await d.execute('DELETE FROM ai_docs WHERE scope = $1 AND owner_id = $2 AND kind = $3 AND id <> $4', [
+      doc.scope,
+      doc.ownerId,
+      doc.kind,
+      id,
+    ]);
+  }
   await touchOwner(doc.scope, doc.ownerId);
   return { id, ...doc, createdAt };
 }
 
+// Newest first.
+export async function listAiDocs(scope: AiScope, ownerId: number, kind: AiDocKind): Promise<AiDoc[]> {
+  const rows = await conn().select<AiDocRow[]>(
+    'SELECT * FROM ai_docs WHERE scope = $1 AND owner_id = $2 AND kind = $3 ORDER BY id DESC',
+    [scope, ownerId, kind],
+  );
+  return rows.map(toAiDoc);
+}
+
+export async function deleteAiDocVersion(doc: Pick<AiDoc, 'id' | 'scope' | 'ownerId'>): Promise<void> {
+  await conn().execute('DELETE FROM ai_docs WHERE id = $1', [doc.id]);
+  await touchOwner(doc.scope, doc.ownerId);
+}
+
+// The newest one, for kinds with a history.
 export async function getAiDoc(scope: AiScope, ownerId: number, kind: AiDocKind): Promise<AiDoc | null> {
   const rows = await conn().select<AiDocRow[]>(
     'SELECT * FROM ai_docs WHERE scope = $1 AND owner_id = $2 AND kind = $3 ORDER BY id DESC LIMIT 1',

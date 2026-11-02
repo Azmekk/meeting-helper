@@ -25,6 +25,7 @@ import { formatTranscript, languageInstruction, toPromptLines } from './prompts'
 export interface FolderAiOptions {
   signal?: AbortSignal;
   onText?: (text: string) => void;
+  model?: string; // instead of the summary model setting, for this call only
 }
 
 function costOf(result: AiResult): number | null {
@@ -149,6 +150,7 @@ export async function rebuildFolderSummary(folderId: number, opts: FolderAiOptio
       context: `Folder: ${folder.name}\n\nMeeting summaries, oldest first:\n\n${parts.join('\n\n')}`,
       messages: [{ role: 'user', content: 'Write the folder summary from these meetings.' }],
       maxTokens: 8000,
+      model: opts.model || undefined,
       signal: opts.signal,
     },
     { onText: (_d, text) => opts.onText?.(text) },
@@ -259,6 +261,7 @@ export async function reconcileActionItems(folderId: number, meetingId: number, 
     ],
     maxTokens: 8000,
     json: { name: 'action_items', schema: RECONCILE_SCHEMA as unknown as Record<string, unknown> },
+    model: opts.model || undefined,
     signal: opts.signal,
   });
   const out = result.json as ReconcileOutput | undefined;
@@ -340,6 +343,7 @@ export async function extractMeeting(templateId: number, meetingId: number, opts
     maxTokens: 4000,
     effort: 'normal',
     json: { name: 'extraction', schema: extractionSchema(t) },
+    model: opts.model || undefined,
     signal: opts.signal,
   });
   const out = result.json as Record<string, unknown> | undefined;
@@ -364,14 +368,14 @@ export interface ExtractionRun {
 export async function runExtraction(
   templateId: number,
   meetingIds: number[],
-  opts: { signal?: AbortSignal; onStep?: (done: number, total: number) => void } = {},
+  opts: { signal?: AbortSignal; model?: string; onStep?: (done: number, total: number) => void } = {},
 ): Promise<ExtractionRun> {
   const run: ExtractionRun = { done: 0, failed: [], costUsd: 0 };
   for (const [i, id] of meetingIds.entries()) {
     if (opts.signal?.aborted) break;
     opts.onStep?.(i, meetingIds.length);
     try {
-      run.costUsd += (await extractMeeting(templateId, id, { signal: opts.signal })) ?? 0;
+      run.costUsd += (await extractMeeting(templateId, id, { signal: opts.signal, model: opts.model })) ?? 0;
       run.done++;
     } catch (err) {
       if (isAbortError(err)) break;
@@ -536,6 +540,7 @@ export async function askFolder(
       maxToolRounds: 10,
       maxTokens: 8000,
       effort: 'normal',
+      model: opts.model || undefined,
       signal: opts.signal,
     },
     { onText: (_d, text) => opts.onText?.(text), onToolCall: opts.onTool },
@@ -589,8 +594,10 @@ export function updateFolderAfterMeeting(meetingId: number): Promise<void> {
         }
       };
       const state = await getFolderState(folderId);
+      // Folding into nothing would lose the other meetings if every summary was deleted.
+      const allDeleted = state.summaryMeetings.length > 0 && !(await db.getAiDoc('folder', folderId, 'folder_summary'));
       await step('Updating the folder summary…', () =>
-        state.summaryMeetings.includes(meetingId) ? rebuildFolderSummary(folderId) : updateFolderSummary(folderId, meetingId),
+        allDeleted || state.summaryMeetings.includes(meetingId) ? rebuildFolderSummary(folderId) : updateFolderSummary(folderId, meetingId),
       );
       await step('Updating action items…', () => reconcileActionItems(folderId, meetingId));
       for (const t of await db.listExtractionTemplates(folderId)) {

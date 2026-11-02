@@ -3,8 +3,10 @@
 // opens that meeting at the cited line.
 import { TermsField } from '../TermsField';
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
+import { AiModelSelect, useAiModel } from '../ai/AiModelSelect';
+import { SummaryHistoryControls, useSummaryHistory } from '../ai/SummaryHistory';
 import { ArrowUp, MessageSquare, RefreshCw, Search, Square, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button, Callout, Card, Modal, Spinner, Textarea, clsx, errorMessage, toast } from '../ui';
 import { ChatBubble, NoKeyNotice, useAbortable, useAiKey } from '../meeting/AiPanels';
@@ -13,11 +15,9 @@ import * as db from '../../lib/db';
 import { citedIds } from '../../lib/ai/prompts';
 import { askFolder, rebuildFolderSummary, useFolderAi } from '../../lib/ai/folder';
 import { isAbortError } from '../../lib/ai/meeting';
-import { effectiveModel } from '../../lib/ai';
 import { formatDate, formatUsd } from '../../lib/format';
 import { refreshFolders } from '../../lib/folders';
-import { useSettings } from '../../lib/settings';
-import type { AiDoc, ChatMessage, Folder } from '../../lib/types';
+import type { ChatMessage, Folder } from '../../lib/types';
 
 // Loads the segments cited anywhere in `texts` (any meeting) for CiteChip.
 export function useFolderCites(texts: string[]): CiteProps {
@@ -55,52 +55,41 @@ export function useFolderCites(texts: string[]): CiteProps {
 
 export function FolderSummaryPanel({ folder }: { folder: Folder }) {
   const hasKey = useAiKey();
-  const model = useSettings((s) => effectiveModel('summary', s.settings));
+  const [model, setModel] = useAiModel();
   const autoBusy = useFolderAi((s) => s.busy[folder.id]);
-  const [doc, setDoc] = useState<AiDoc | null | undefined>(undefined);
+  const { docs, doc, select, showNewest, reload, loadError } = useSummaryHistory('folder', folder.id, 'folder_summary');
   const [streaming, setStreaming] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const error = runError ?? loadError;
   const { start, stop } = useAbortable();
-
-  const load = useCallback(() => {
-    db.getAiDoc('folder', folder.id, 'folder_summary')
-      .then(setDoc)
-      .catch((err) => {
-        setDoc(null);
-        setError(errorMessage(err));
-      });
-  }, [folder.id]);
-
-  useEffect(() => {
-    setDoc(undefined);
-    load();
-  }, [load]);
 
   // Background updates finish while the tab is open.
   const wasBusy = useRef(autoBusy);
   useEffect(() => {
-    if (wasBusy.current && !autoBusy) load();
+    if (wasBusy.current && !autoBusy) void reload();
     wasBusy.current = autoBusy;
-  }, [autoBusy, load]);
+  }, [autoBusy, reload]);
 
   const cite = useFolderCites(doc ? [doc.content] : []);
   const streamCite = useFolderCites(streaming ? [streaming] : []);
 
   const rebuild = async () => {
     const signal = start();
-    setError(null);
+    setRunError(null);
     setStreaming('');
     try {
-      setDoc(await rebuildFolderSummary(folder.id, { signal, onText: setStreaming }));
+      await rebuildFolderSummary(folder.id, { signal, onText: setStreaming, model });
+      showNewest();
+      await reload();
       toast('Folder summary ready', 'success');
     } catch (err) {
-      if (!isAbortError(err)) setError(errorMessage(err));
+      if (!isAbortError(err)) setRunError(errorMessage(err));
     } finally {
       setStreaming(null);
     }
   };
 
-  if (doc === undefined || hasKey === undefined) {
+  if (!docs || hasKey === undefined) {
     return (
       <div className="flex justify-center py-10">
         <Spinner />
@@ -112,7 +101,12 @@ export function FolderSummaryPanel({ folder }: { folder: Folder }) {
 
   return (
     <Card
-      title="Folder summary"
+      title={
+        <span className="flex flex-wrap items-center gap-2">
+          Folder summary
+          {doc && !busy && <SummaryHistoryControls docs={docs} doc={doc} onSelect={select} onDeleted={() => void reload()} />}
+        </span>
+      }
       description={
         busy
           ? `Writing with ${model}…`
@@ -128,12 +122,13 @@ export function FolderSummaryPanel({ folder }: { folder: Folder }) {
             Stop
           </Button>
         ) : (
-          <div className="flex items-center gap-2">
+          <>
             <AiLanguageSelect />
-            <Button size="sm" icon={RefreshCw} onClick={rebuild} disabled={!hasKey || !!autoBusy} title="Rebuild from every meeting summary in the folder">
+            <AiModelSelect value={model} onChange={setModel} />
+            <Button size="sm" icon={RefreshCw} onClick={rebuild} disabled={!hasKey || !!autoBusy} title="Rebuild from every meeting summary in the folder. This one stays in the history.">
               Rebuild from all meetings
             </Button>
-          </div>
+          </>
         )
       }
     >
@@ -174,6 +169,7 @@ const TOOL_LABEL: Record<string, string> = {
 
 export function FolderChatPanel({ folder }: { folder: Folder }) {
   const hasKey = useAiKey();
+  const [model, setModel] = useAiModel();
   const [messages, setMessages] = useState<ChatMessage[] | undefined>(undefined);
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<{ question: string; text: string; tool: string | null } | null>(null);
@@ -213,6 +209,7 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
     try {
       const ex = await askFolder(folder.id, question, {
         signal,
+        model,
         onText: (t) => setPending((p) => (p ? { ...p, text: t, tool: null } : p)),
         onTool: (call) => {
           const q = typeof call.input.query === 'string' ? `: ${call.input.query}` : '';
@@ -256,14 +253,15 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
       description="Ask across every meeting in this folder. The AI searches the transcripts and links to the lines it uses."
       padded={false}
       actions={
-        <div className="flex items-center gap-2">
+        <>
           <AiLanguageSelect />
+          <AiModelSelect value={model} onChange={setModel} disabled={!!pending} />
           {messages.length > 0 && (
             <Button size="sm" variant="ghost" icon={Trash2} disabled={!!pending} onClick={() => setConfirmClear(true)}>
               Clear chat
             </Button>
           )}
-        </div>
+        </>
       }
     >
       <div

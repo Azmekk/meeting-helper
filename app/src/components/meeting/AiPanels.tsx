@@ -2,6 +2,8 @@
 // Requests stay alive while switching tabs (panels stay mounted) and are
 // aborted when the meeting screen unmounts.
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
+import { AiModelSelect, useAiModel } from '../ai/AiModelSelect';
+import { SummaryHistoryControls, useSummaryHistory } from '../ai/SummaryHistory';
 import { ArrowUp, KeyRound, MessageSquare, Play, RefreshCw, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -9,9 +11,8 @@ import { Button, Callout, Card, EmptyState, IconButton, Modal, Spinner, Textarea
 import * as db from '../../lib/db';
 import { formatDate, formatTimestamp, formatUsd } from '../../lib/format';
 import { askMeeting, hasAiKey, isAbortError, onMeetingSummarized, startSummary, stopSummary, useSummaryJobs } from '../../lib/ai/meeting';
-import { effectiveModel } from '../../lib/ai';
 import { useSettings } from '../../lib/settings';
-import type { AiDoc, ChatMessage, Meeting } from '../../lib/types';
+import type { ChatMessage, Meeting } from '../../lib/types';
 import { AiMarkdown, type CiteProps, type CiteTarget } from './AiMarkdown';
 
 // undefined while checking. Re-checked when the AI provider setting changes.
@@ -73,41 +74,30 @@ function NoTranscriptNotice() {
 
 export function SummaryPanel({ meetingId, hasText, cite }: { meetingId: number; hasText: boolean; cite: CiteProps }) {
   const hasKey = useAiKey();
-  const summaryModel = useSettings((s) => effectiveModel('summary', s.settings));
-  const [doc, setDoc] = useState<AiDoc | null | undefined>(undefined);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [model, setModel] = useAiModel();
+  const { docs, doc, select, showNewest, reload, loadError } = useSummaryHistory('meeting', meetingId, 'summary');
   // The run itself lives in lib/ai/meeting.ts, so leaving this tab doesn't stop it.
   const job = useSummaryJobs((s) => s[meetingId]);
   const streaming = job?.running ? job.text : null;
   const error = job?.error ?? loadError;
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      db
-        .getAiDoc('meeting', meetingId, 'summary')
-        .then((d) => alive && setDoc(d))
-        .catch((err) => {
-          if (!alive) return;
-          setDoc(null);
-          setLoadError(errorMessage(err));
-        });
-    setDoc(undefined);
-    void load();
-    // A run started here, in the "Recording saved" dialog or before leaving the tab.
-    const off = onMeetingSummarized((id) => id === meetingId && void load());
-    return () => {
-      alive = false;
-      off();
-    };
-  }, [meetingId]);
+  // A run started here, in the "Recording saved" dialog or before leaving the tab.
+  useEffect(
+    () =>
+      onMeetingSummarized((id) => {
+        if (id !== meetingId) return;
+        showNewest();
+        void reload();
+      }),
+    [meetingId, reload, showNewest],
+  );
 
   const generate = async () => {
-    if (await startSummary(meetingId)) toast('Summary ready', 'success');
+    if (await startSummary(meetingId, { model })) toast('Summary ready', 'success');
   };
   const stop = () => stopSummary(meetingId);
 
-  if (doc === undefined || hasKey === undefined) {
+  if (!docs || hasKey === undefined) {
     return (
       <div className="flex justify-center py-10">
         <Spinner />
@@ -120,10 +110,15 @@ export function SummaryPanel({ meetingId, hasText, cite }: { meetingId: number; 
 
   return (
     <Card
-      title="Summary"
+      title={
+        <span className="flex flex-wrap items-center gap-2">
+          Summary
+          {doc && !busy && <SummaryHistoryControls docs={docs} doc={doc} onSelect={select} onDeleted={() => void reload()} />}
+        </span>
+      }
       description={
         busy
-          ? `Writing with ${job?.model || summaryModel}… You can leave this page; it keeps going.`
+          ? `Writing with ${job?.model || model}… You can leave this page; it keeps going.`
           : doc
             ? `${doc.model ?? 'Unknown model'} · ${formatUsd(doc.costUsd)} · ${formatDate(doc.createdAt)}`
             : 'Overview, decisions, action items and open questions, each linked to the transcript.'
@@ -134,14 +129,15 @@ export function SummaryPanel({ meetingId, hasText, cite }: { meetingId: number; 
             Stop
           </Button>
         ) : (
-          <div className="flex items-center gap-2">
+          <>
             <AiLanguageSelect />
+            <AiModelSelect value={model} onChange={setModel} />
             {doc && (
-              <Button size="sm" icon={RefreshCw} onClick={generate} disabled={!hasKey || !hasText} title={!hasKey ? 'Add an AI key in Settings' : undefined}>
+              <Button size="sm" icon={RefreshCw} onClick={generate} disabled={!hasKey || !hasText} title={!hasKey ? 'Add an AI key in Settings' : 'Writes a new summary. This one stays in the history.'}>
                 Regenerate
               </Button>
             )}
-          </div>
+          </>
         )
       }
     >
@@ -163,7 +159,7 @@ export function SummaryPanel({ meetingId, hasText, cite }: { meetingId: number; 
       ) : (
         <div className="flex flex-col items-center gap-3 py-6 text-center">
           <p className="max-w-sm text-[13px] text-muted">
-            Uses <span className="font-medium text-text">{summaryModel || 'the summary model'}</span>. Add a briefing on the left to tell the AI who you are and what matters.
+            Uses <span className="font-medium text-text">{model || 'the summary model'}</span>. Add a briefing on the left to tell the AI who you are and what matters.
           </p>
           <Button variant="primary" icon={Sparkles} onClick={generate}>
             Generate summary
@@ -180,6 +176,7 @@ const SUGGESTIONS = ['What did I commit to?', 'What were the main disagreements?
 
 export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; hasText: boolean; cite: CiteProps }) {
   const hasKey = useAiKey();
+  const [model, setModel] = useAiModel();
   const [messages, setMessages] = useState<ChatMessage[] | undefined>(undefined);
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<{ question: string; text: string } | null>(null);
@@ -217,6 +214,7 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
     try {
       const ex = await askMeeting(meetingId, question, {
         signal,
+        model,
         onText: (t) => setPending((p) => (p ? { ...p, text: t } : p)),
       });
       setMessages((m) => [...(m ?? []), ex.question, ex.answer]);
@@ -259,14 +257,15 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
       description="Ask anything about this meeting. Answers link to the lines they come from."
       padded={false}
       actions={
-        <div className="flex items-center gap-2">
+        <>
           <AiLanguageSelect />
+          <AiModelSelect value={model} onChange={setModel} disabled={!!pending} />
           {messages.length > 0 && (
             <Button size="sm" variant="ghost" icon={Trash2} disabled={!!pending} onClick={() => setConfirmClear(true)}>
               Clear chat
             </Button>
           )}
-        </div>
+        </>
       }
     >
       <div

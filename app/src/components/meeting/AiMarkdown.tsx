@@ -121,7 +121,7 @@ export function CiteChip({ segId, resolve, onCite }: { segId: number } & CitePro
 }
 
 function renderInline(text: string, cite: CiteProps, key: string): ReactNode[] {
-  return parseCitations(text).map((part, i) =>
+  return parseCitations(text, (id) => cite.resolve(id) != null).map((part, i) =>
     part.type === 'cite' ? (
       <CiteChip key={`${key}-c${i}`} segId={part.segId} {...cite} />
     ) : (
