@@ -178,7 +178,7 @@ export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: M
   return (
     <Card
       title={
-        <span className="flex items-center gap-2">
+        <span className="flex flex-wrap items-center gap-2">
           <Select value={selected ?? ''} onChange={(e) => setSelected(Number(e.target.value))} className="h-8 w-auto max-w-xs text-sm font-semibold">
             {templates.map((t) => (
               <option key={t.id} value={t.id}>

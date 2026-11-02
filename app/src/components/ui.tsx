@@ -734,10 +734,11 @@ export function Card({
             collapsible && !open ? 'pb-[18px]' : padded ? 'pb-1' : 'border-b border-line pb-3.5',
           )}
         >
-          {/* Actions wrap below the title instead of squeezing it. */}
-          <div className="min-w-[min(100%,14rem)] flex-1">
+          {/* Actions wrap below the title instead of squeezing it. The title sets the
+              width that decides this; the description (w-0 min-w-full) just fills it. */}
+          <div className="min-w-[min(100%,14rem)] flex-auto">
             {title && <h2 className="text-[15px] font-semibold">{title}</h2>}
-            {description && <p className="mt-0.5 text-[13px] text-muted">{description}</p>}
+            {description && <p className="mt-0.5 w-0 min-w-full text-[13px] text-muted">{description}</p>}
           </div>
           {actions && <div className="flex max-w-full flex-wrap items-center gap-2">{actions}</div>}
         </div>
