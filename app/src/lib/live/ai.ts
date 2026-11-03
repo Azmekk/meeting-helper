@@ -38,6 +38,7 @@ let lastNotesModel = '';
 let lastNotesAt = 0;
 let answerSeq = 0;
 let answerAbort: AbortController | null = null;
+let notesSaving: Promise<boolean> = Promise.resolve(false);
 
 export function resetAi() {
   notesLineCount = 0;
@@ -108,6 +109,8 @@ export async function refreshNotes(): Promise<void> {
     lastNotesAt = Date.now();
     const text = result.text.trim();
     set((st) => ({ notes: text || st.notes, notesBusy: false, ...addSpend(st, result) }));
+    // Saved at every update, so MCP clients can read them during the meeting.
+    if (s.meetingId != null) void storeNotes(s.meetingId);
   } catch (err) {
     set({ notesBusy: false, notesError: errorMessage(err) });
   }
@@ -215,13 +218,12 @@ export async function helpMeAnswer(question?: string): Promise<void> {
   }
 }
 
-// Keeps the final notes with the meeting.
-export async function saveNotes(meetingId: number) {
+async function writeNotes(meetingId: number): Promise<boolean> {
   const notes = get().notes.trim();
-  if (!notes || get().meetingId !== meetingId) return;
+  if (!notes || get().meetingId !== meetingId) return false;
   try {
     // "Delete recording" may have removed the meeting meanwhile.
-    if (!(await db.getMeeting(meetingId))) return;
+    if (!(await db.getMeeting(meetingId))) return false;
     await db.saveAiDoc({
       scope: 'meeting',
       ownerId: meetingId,
@@ -230,10 +232,22 @@ export async function saveNotes(meetingId: number) {
       model: get().overrides.live || effectiveModel('live'),
       costUsd: get().aiCostUsd || null,
     });
-    emitMeetingChanged(meetingId);
+    return true;
   } catch (err) {
     console.warn('Could not save live notes', err);
+    return false;
   }
+}
+
+// One write at a time: each replaces the last, so two at once could delete each other.
+function storeNotes(meetingId: number): Promise<boolean> {
+  notesSaving = notesSaving.then(() => writeNotes(meetingId));
+  return notesSaving;
+}
+
+// Keeps the final notes with the meeting.
+export async function saveNotes(meetingId: number) {
+  if (await storeNotes(meetingId)) emitMeetingChanged(meetingId);
 }
 
 // ---------- Models ----------

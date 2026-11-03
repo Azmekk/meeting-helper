@@ -23,6 +23,7 @@ const MAX_PAGE_CHARS: usize = 24_000;
 
 const INSTRUCTIONS: &str = "Meetings recorded in Meeting Helper: transcripts, summaries and tasks. \
 Search or list first, then read what you need; transcripts come in pages. \
+A meeting listed as \"recording now\" is usually happening right now: its transcript keeps growing and its notes keep changing, so read them again for each question. \
 When you state something from a meeting, include a link to that moment so the user can jump to it: \
 meeting-helper://meeting/<meeting id>?t=<start in ms>&seg=<line id>. Results give these values, or the whole link. \
 Keep such links in your answers. Change tasks only when the user asks you to.";
@@ -183,8 +184,9 @@ async fn list_meetings(db: &SqlitePool, args: &Value) -> Result<String, String> 
     let limit = int(args, "limit").unwrap_or(50).clamp(1, 200);
     let folder = int(args, "folder_id");
     let rows = sqlx::query(
-        "SELECT m.id, m.title, m.created_at, m.duration_ms, m.folder_id, f.name AS folder,
+        "SELECT m.id, m.title, m.created_at, m.duration_ms, m.folder_id, m.status, f.name AS folder,
            EXISTS (SELECT 1 FROM ai_docs d WHERE d.scope = 'meeting' AND d.owner_id = m.id AND d.kind = 'summary') AS has_summary,
+           EXISTS (SELECT 1 FROM ai_docs d WHERE d.scope = 'meeting' AND d.owner_id = m.id AND d.kind = 'notes') AS has_notes,
            m.active_transcript_id IS NOT NULL AS has_transcript
          FROM meetings m LEFT JOIN folders f ON f.id = m.folder_id
          WHERE ($1 IS NULL OR m.folder_id = $1)
@@ -203,7 +205,7 @@ async fn list_meetings(db: &SqlitePool, args: &Value) -> Result<String, String> 
         .map(|r| {
             let date: String = r.get("created_at");
             format!(
-                "meeting {} | {} | {} | {} | folder: {} | transcript: {} | summary: {}",
+                "meeting {} | {} | {} | {} | folder: {} | transcript: {} | summary: {} | notes: {}{}",
                 r.get::<i64, _>("id"),
                 date.get(..10).unwrap_or(&date),
                 r.get::<String, _>("title"),
@@ -211,6 +213,8 @@ async fn list_meetings(db: &SqlitePool, args: &Value) -> Result<String, String> 
                 r.get::<Option<String>, _>("folder").unwrap_or_else(|| "none".into()),
                 if r.get::<bool, _>("has_transcript") { "yes" } else { "no" },
                 if r.get::<bool, _>("has_summary") { "yes" } else { "no" },
+                if r.get::<bool, _>("has_notes") { "yes" } else { "no" },
+                if r.get::<String, _>("status") == "recording" { " | recording now" } else { "" },
             )
         })
         .collect::<Vec<_>>()
@@ -267,6 +271,27 @@ async fn meeting_summary(db: &SqlitePool, args: &Value) -> Result<String, String
     Ok(match row {
         Some(r) => format!("Citations like [#123] are line ids from get_transcript.\n\n{}", r.get::<String, _>("content")),
         None => format!("Meeting {id} has no summary yet; read it with get_transcript."),
+    })
+}
+
+async fn meeting_notes(db: &SqlitePool, args: &Value) -> Result<String, String> {
+    let id = int(args, "meeting_id").ok_or("meeting_id is required.")?;
+    let row = sqlx::query(
+        "SELECT d.content, d.created_at, m.status FROM ai_docs d JOIN meetings m ON m.id = d.owner_id
+         WHERE d.scope = 'meeting' AND d.owner_id = $1 AND d.kind = 'notes' ORDER BY d.id DESC LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(r) = row else {
+        return Ok(format!("Meeting {id} has no live notes; read it with get_transcript."));
+    };
+    let content = r.get::<String, _>("content");
+    Ok(if r.get::<String, _>("status") == "recording" {
+        format!("Running notes, last updated {} (UTC). Newer lines may only be in get_transcript.\n\n{content}", r.get::<String, _>("created_at"))
+    } else {
+        format!("Notes taken during the meeting.\n\n{content}")
     })
 }
 
@@ -466,6 +491,13 @@ fn tools() -> Value {
         ),
         tool("get_meeting_summary", "Returns a meeting's AI summary, if it has one.", true, json!({ "meeting_id": id }), &["meeting_id"]),
         tool(
+            "get_meeting_notes",
+            "Returns the short running notes kept during a live meeting, including one still being recorded.",
+            true,
+            json!({ "meeting_id": id }),
+            &["meeting_id"],
+        ),
+        tool(
             "get_transcript",
             "Returns transcript lines of a meeting, one page at a time. A page says which offset comes next.",
             true,
@@ -523,6 +555,7 @@ async fn call_tool(params: &Value) -> Result<String, String> {
         "list_meetings" => list_meetings(&db, &args).await,
         "search_transcripts" => search(&db, &args).await,
         "get_meeting_summary" => meeting_summary(&db, &args).await,
+        "get_meeting_notes" => meeting_notes(&db, &args).await,
         "get_transcript" => transcript(&db, &args).await,
         "list_tasks" => list_tasks(&db, &args).await,
         "add_task" => add_task(&db, &args).await,
@@ -603,6 +636,30 @@ mod tests {
         assert_eq!(timestamp(75_000), "01:15");
         assert_eq!(timestamp(3_675_000), "1:01:15");
         assert_eq!(link(12, 75_000, Some(345)), "meeting-helper://meeting/12?t=75000&seg=345");
+    }
+
+    #[tokio::test]
+    async fn shows_a_meeting_being_recorded_and_its_notes() {
+        let db = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        for sql in [
+            "CREATE TABLE folders (id INTEGER PRIMARY KEY, name TEXT)",
+            "CREATE TABLE meetings (id INTEGER PRIMARY KEY, title TEXT, created_at TEXT, duration_ms INTEGER, folder_id INTEGER, status TEXT, active_transcript_id INTEGER)",
+            "CREATE TABLE ai_docs (id INTEGER PRIMARY KEY, scope TEXT, owner_id INTEGER, kind TEXT, content TEXT, created_at TEXT)",
+            "INSERT INTO meetings (id, title, created_at, status) VALUES (1, 'Old', '2026-11-01T10:00:00Z', 'ready'), (2, 'Now', '2026-11-03T10:00:00Z', 'recording')",
+            "INSERT INTO ai_docs (scope, owner_id, kind, content, created_at) VALUES ('meeting', 2, 'notes', '- Budget', '2026-11-03T10:05:00Z')",
+        ] {
+            sqlx::query(sql).execute(&db).await.unwrap();
+        }
+
+        let list = list_meetings(&db, &json!({})).await.unwrap();
+        let (now, old) = list.split_once('\n').unwrap();
+        assert!(now.ends_with("notes: yes | recording now"));
+        assert!(old.ends_with("notes: no"));
+
+        let notes = meeting_notes(&db, &json!({ "meeting_id": 2 })).await.unwrap();
+        assert!(notes.starts_with("Running notes, last updated 2026-11-03T10:05:00Z"));
+        assert!(notes.ends_with("- Budget"));
+        assert!(meeting_notes(&db, &json!({ "meeting_id": 1 })).await.unwrap().contains("no live notes"));
     }
 
     #[tokio::test]

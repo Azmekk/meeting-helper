@@ -115,7 +115,7 @@ export function McpSection() {
           </SettingRow>
         </div>
         <ul className="mt-3 list-disc space-y-1.5 pl-5 text-[13px] text-muted">
-          <li>It can read folders, meeting lists, summaries, transcripts and tasks. API keys and recordings stay out of reach.</li>
+          <li>It can read folders, meeting lists, summaries, live notes, transcripts and tasks, including those of a meeting still being recorded. API keys and recordings stay out of reach.</li>
           <li>What it reads goes to that tool's provider under that tool's own terms, so check that suits the people in your meetings.</li>
           <li>Long transcripts count against your plan's limits. Answers link to the moment in the meeting; if a link won't click in your terminal, copy it into a browser.</li>
           <li>Live features, like “Help me answer” and the overlay, stay in this app.</li>
