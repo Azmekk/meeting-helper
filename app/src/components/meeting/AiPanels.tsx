@@ -3,7 +3,7 @@
 // aborted when the meeting screen unmounts.
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
 import { AiModelSelect, rememberAiModel, useAiModel } from '../ai/AiModelSelect';
-import { ConversationBar, ProposalCard, useConversations } from '../ai/ChatParts';
+import { ChatCacheLine, ConversationBar, ProposalCard, answerMeta, useCacheStatus, useConversations } from '../ai/ChatParts';
 import { SummaryHistoryControls, useSummaryHistory } from '../ai/SummaryHistory';
 import { ArrowUp, KeyRound, MessageSquare, Play, RefreshCw, Sparkles, Square, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -11,7 +11,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Button, Callout, Card, EmptyState, IconButton, Spinner, Textarea, errorMessage, toast } from '../ui';
 import * as db from '../../lib/db';
 import { formatDate, formatTimestamp, formatUsd } from '../../lib/format';
-import { askMeeting, coldQuestionCost, hasAiKey, isAbortError, onMeetingSummarized, startSummary, stopSummary, useSummaryJobs } from '../../lib/ai/meeting';
+import { askMeeting, hasAiKey, isAbortError, meetingCacheStatus, onMeetingSummarized, startSummary, stopSummary, useSummaryJobs } from '../../lib/ai/meeting';
 import { useSettings } from '../../lib/settings';
 import type { ChatMessage, Meeting } from '../../lib/types';
 import { AiMarkdown, type CiteProps, type CiteTarget } from './AiMarkdown';
@@ -196,8 +196,6 @@ export function ChatPanel({
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<{ question: string; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [costs, setCosts] = useState<Record<number, string>>({});
-  const [coldCost, setColdCost] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
@@ -215,22 +213,8 @@ export function ChatPanel({
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [messages, pending]);
 
-  // Warns before a question that has to pay for the whole transcript again.
-  // Rechecked regularly: the cache expires while the chat sits idle.
-  useEffect(() => {
-    if (!hasText || !hasKey) return;
-    let alive = true;
-    const check = () =>
-      coldQuestionCost(meetingId, chat.activeId, model)
-        .then((usd) => alive && setColdCost(usd))
-        .catch(() => alive && setColdCost(null));
-    void check();
-    const timer = setInterval(() => void check(), 30_000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [meetingId, chat.activeId, model, hasText, hasKey, pending]);
+  const loadCache = useCallback(() => meetingCacheStatus(meetingId, chat.activeId, model), [meetingId, chat.activeId, model]);
+  const cache = useCacheStatus(loadCache, !!hasText && !!hasKey, pending);
 
   const send = async (text = input) => {
     const question = text.trim();
@@ -249,7 +233,6 @@ export function ChatPanel({
       });
       rememberAiModel(`chat:meeting:${ex.conversationId}`, model);
       await chat.add(ex);
-      setCosts((c) => ({ ...c, [ex.answer.id]: [ex.model, formatUsd(ex.costUsd), ex.note].filter(Boolean).join(' · ') }));
     } catch (err) {
       // Nothing was saved; give the question back so it can be retried.
       setInput((cur) => cur || question);
@@ -275,7 +258,7 @@ export function ChatPanel({
   return (
     <Card
       title="Chat"
-      description="Ask anything about this meeting. Answers link to the lines they come from."
+      description="Ask anything about this meeting."
       padded={false}
       className="flex min-h-0 flex-1 flex-col"
       bodyClassName="flex min-h-0 flex-1 flex-col"
@@ -309,7 +292,7 @@ export function ChatPanel({
         )}
         {messages.map((m) => (
           <div key={m.id}>
-            <ChatBubble role={m.role} text={m.content} meta={costs[m.id]} cite={cite} />
+            <ChatBubble role={m.role} text={m.content} meta={answerMeta(m)} cite={cite} />
             {m.proposal && folderId != null && <ProposalCard message={m} folderId={folderId} meetingId={meetingId} onChange={chat.setProposal} />}
           </div>
         ))}
@@ -333,11 +316,7 @@ export function ChatPanel({
             <p className="break-words">{shownError}</p>
           </Callout>
         )}
-        {coldCost != null && coldCost >= 0.01 && !pending && (
-          <p className="mb-2 text-xs text-muted">
-            The cached transcript has expired or isn't made yet, so the next question costs about {formatUsd(coldCost)}. Questions after it are much cheaper.
-          </p>
-        )}
+        <ChatCacheLine status={cache} conversation={chat.conversations.find((c) => c.id === chat.activeId)} />
         {!hasKey && (
           <p className="mb-2 text-[13px] text-muted">
             Add an AI key in{' '}
@@ -409,9 +388,9 @@ export function CitedLine({
   onClose: () => void;
 }) {
   return (
-    <div className="surface mb-4 flex items-center gap-3 rounded-2xl py-2 pr-2 pl-3 text-[13px]">
+    <div className="surface mb-3 flex shrink-0 items-center gap-3 rounded-2xl py-2 pr-2 pl-3 text-[13px]">
       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-ink"><Play size={13} className="translate-x-px" /></span>
-      <div className="min-w-0 flex-1">
+      <div className="line-clamp-2 min-w-0 flex-1" title={target.text}>
         <span className="mr-2 rounded-full bg-accent-soft px-[7px] py-px text-[12px] font-semibold text-accent-ink tabular-nums">{formatTimestamp(target.startMs)}</span>
         <span className="mr-1.5 font-medium">{target.speaker}:</span>
         <span className="text-muted">{target.text}</span>

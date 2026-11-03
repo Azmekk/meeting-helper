@@ -129,6 +129,10 @@ export interface ChatMessage {
   createdAt: string; // ISO 8601
   conversationId?: number | null;
   proposal?: TaskProposal | null; // task changes the AI suggested in this answer
+  // Set on answers; empty on ones saved before these were recorded.
+  model?: string | null;
+  costUsd?: number | null;
+  cachedPercent?: number | null;
 }
 
 export interface ChatConversation {
@@ -138,6 +142,8 @@ export interface ChatConversation {
   title: string;
   createdAt: string;
   updatedAt: string;
+  costUsd: number | null; // answers with a known cost, added up
+  unpricedAnswers: number; // answers left out of costUsd
 }
 
 // What the AI may suggest in chat. Nothing changes until the user applies it.

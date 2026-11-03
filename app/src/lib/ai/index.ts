@@ -7,7 +7,7 @@ import { custom, deepseek, openai } from './openai';
 import type { AiAuth, AiEffort, AiProvider, AiProviderId, AiRequest, AiResult, AiStreamHandlers, AiTask } from './types';
 
 export * from './types';
-export { cacheWindowMs, cachedPercent, estimateCallCost, estimateCost, priceFor, roughTokens, usageNote } from './pricing';
+export { cacheWindowMs, cachedPercent, estimateCallCost, estimateCost, priceFor, roughTokens } from './pricing';
 
 export const AI_PROVIDERS: Record<AiProviderId, AiProvider> = { anthropic, openai, deepseek, custom };
 

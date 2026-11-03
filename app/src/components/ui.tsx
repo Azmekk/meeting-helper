@@ -270,14 +270,17 @@ export function Select({
   title,
   'aria-label': ariaLabel,
   plain,
+  search: alwaysSearch,
 }: SelectHTMLAttributes<HTMLSelectElement> & {
   // Only `className` styles the button (for compact pickers in a sentence or toolbar).
   plain?: boolean;
+  // Shows the search field however short the list is.
+  search?: boolean;
 }) {
   const items = collectOptions(children);
   const current = String(value ?? '');
   const selected = items.find((i) => i.value === current) ?? items[0];
-  const searchable = items.length > SEARCH_THRESHOLD;
+  const searchable = alwaysSearch || items.length > SEARCH_THRESHOLD;
   const [open, setOpen] = useState(false);
   const { mounted, closing } = usePresence(open);
   const [query, setQuery] = useState('');

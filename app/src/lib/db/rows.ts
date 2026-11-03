@@ -138,6 +138,9 @@ export interface ChatMessageRow {
   conversation_id: number | null;
   proposal: string | null;
   created_at: string;
+  model: string | null;
+  cost_usd: number | null;
+  cached_percent: number | null;
 }
 
 export const toAiDoc = (r: AiDocRow): AiDoc => ({
@@ -160,6 +163,9 @@ export const toChatMessage = (r: ChatMessageRow): ChatMessage => ({
   createdAt: r.created_at,
   conversationId: r.conversation_id,
   proposal: parseProposal(r.proposal),
+  model: r.model,
+  costUsd: r.cost_usd,
+  cachedPercent: r.cached_percent,
 });
 
 function parseProposal(raw: string | null): TaskProposal | null {

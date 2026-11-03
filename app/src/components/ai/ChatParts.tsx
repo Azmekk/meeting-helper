@@ -3,10 +3,12 @@
 import { Check, ListChecks, Plus, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import * as db from '../../lib/db';
+import { formatUsd } from '../../lib/format';
+import type { CacheStatus } from '../../lib/ai/meeting';
 import { tasksChanged } from '../../lib/ai/folder';
 import { applyProposal, describeChange } from '../../lib/ai/tasks';
 import type { ActionItem, AiScope, ChatConversation, ChatMessage, TaskChange, TaskProposal } from '../../lib/types';
-import { Badge, Button, IconButton, Input, Modal, Select, errorMessage, toast } from '../ui';
+import { Badge, Button, IconButton, Input, Modal, Select, clsx, errorMessage, toast } from '../ui';
 
 export function useConversations(scope: AiScope, ownerId: number) {
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
@@ -68,6 +70,63 @@ export function useConversations(scope: AiScope, ownerId: number) {
   return { conversations, activeId, messages, loadError, open, add, remove, setProposal };
 }
 
+// "gpt-6.1-terra · $0.01 · 94% cached", the line under an answer. Answers saved
+// before these were recorded have none.
+export function answerMeta(m: ChatMessage): string | undefined {
+  if (!m.model) return undefined;
+  return [m.model, m.costUsd != null && formatUsd(m.costUsd), m.cachedPercent != null && `${m.cachedPercent}% cached`].filter(Boolean).join(' · ');
+}
+
+// What a conversation has cost so far. The + says some answers have no known cost.
+function conversationCost(c: ChatConversation | undefined): string | null {
+  if (c?.costUsd == null) return null;
+  return `${formatUsd(c.costUsd)}${c.unpricedAnswers ? '+' : ''}`;
+}
+
+// Rechecked regularly: the cache expires while the chat sits idle. Pass a stable
+// `load` (useCallback) and a `refresh` that changes around each answer.
+export function useCacheStatus(load: () => Promise<CacheStatus>, enabled: boolean, refresh: unknown): CacheStatus | null {
+  const [status, setStatus] = useState<CacheStatus | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const check = () =>
+      load()
+        .then((s) => alive && setStatus(s))
+        .catch(() => alive && setStatus(null));
+    void check();
+    const timer = setInterval(() => void check(), 30_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [load, enabled, refresh]);
+  return status;
+}
+
+// Above the message box: is the context still cached, and what this chat has cost.
+export function ChatCacheLine({ status, conversation }: { status: CacheStatus | null; conversation: ChatConversation | undefined }) {
+  const cost = conversationCost(conversation);
+  if (!status && !cost) return null;
+  const minutes = status?.expiresAt != null ? Math.max(1, Math.round((status.expiresAt - Date.now()) / 60_000)) : null;
+  const next = status?.coldCost != null && status.coldCost >= 0.01 ? `, next question about ${formatUsd(status.coldCost)}` : '';
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 text-xs text-muted">
+      {status && (
+        <span className="flex min-w-0 items-center gap-1.5" title="An estimate from when this model last read it. Providers don't report when a cache really expires.">
+          <span aria-hidden className={clsx('h-1.5 w-1.5 shrink-0 rounded-full', minutes != null ? 'bg-ok' : 'bg-warn')} />
+          {minutes != null ? `Cache active, about ${minutes} min left` : status.everUsed ? `Cache expired${next}` : `Not cached for this model yet${next}`}
+        </span>
+      )}
+      {cost && (
+        <span className="ml-auto shrink-0" title={conversation?.unpricedAnswers ? 'Earlier answers have no recorded cost, so the total is higher than this.' : undefined}>
+          This chat: {cost}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // The dropdown, "New chat" and "Delete" row at the top of a chat.
 export function ConversationBar({
   conversations,
@@ -97,13 +156,17 @@ export function ConversationBar({
         aria-label="Conversation"
         value={activeId ?? ''}
         disabled={disabled}
+        search
         onChange={(e) => onOpen(e.target.value ? Number(e.target.value) : null)}
         className="h-8 min-w-0 flex-1 text-[13px]"
       >
         <option value="">New chat</option>
         {conversations.map((c) => (
           <option key={c.id} value={c.id}>
-            {c.title}
+            <span className="flex items-baseline gap-3">
+              <span className="min-w-0 flex-1 truncate">{c.title}</span>
+              {conversationCost(c) && <span className="shrink-0 text-xs font-normal text-muted tabular-nums">{conversationCost(c)}</span>}
+            </span>
           </option>
         ))}
       </Select>

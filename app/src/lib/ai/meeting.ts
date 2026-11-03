@@ -5,8 +5,8 @@ import * as db from '../db';
 import { formatDate } from '../format';
 import { getSecret } from '../secrets';
 import { getSettings } from '../settings';
-import type { AiDoc, ChatMessage, Folder, Meeting, TranscriptDetail } from '../types';
-import { cacheWindowMs, effectiveModel, estimateCallCost, estimateCost, getAiProvider, roughTokens, runAi, usageNote, type AiMessage, type AiResult } from './index';
+import type { AiDoc, AiScope, ChatMessage, Folder, Meeting, TranscriptDetail } from '../types';
+import { cacheWindowMs, cachedPercent, effectiveModel, estimateCallCost, estimateCost, getAiProvider, roughTokens, runAi, type AiMessage, type AiResult } from './index';
 import { TASK_RULES, parseProposal, taskListText, visibleAnswer } from './tasks';
 import { CITATION_RULES, formatTranscript, languageInstruction, normalizeCitations, toPromptLines } from './prompts';
 
@@ -85,19 +85,35 @@ function costOf(result: AiResult): number | null {
   return estimateCost(result.model, result.usage);
 }
 
-// When each model last read this meeting's transcript, for the "cache expired" hint.
-const cacheUse = new Map<string, number>();
-const noteCacheUse = (meetingId: number, model: string) => cacheUse.set(`${model}|${meetingId}`, Date.now());
+export function answerUsage(result: AiResult): db.AnswerUsage {
+  return { model: result.model, costUsd: costOf(result), cachedPercent: cachedPercent(result.usage) };
+}
 
-// What the next question will cost when the cached transcript has expired (or
-// was never made by this model); null while it's probably still there.
-export async function coldQuestionCost(meetingId: number, conversationId: number | null, model = effectiveModel('summary')): Promise<number | null> {
-  const used = cacheUse.get(`${model}|${meetingId}`);
-  if (used != null && Date.now() - used < cacheWindowMs(model)) return null;
-  const ctx = await loadMeetingContext(meetingId);
-  const history = conversationId != null ? await db.listChatMessages('meeting', meetingId, conversationId) : [];
-  const tokens = roughTokens(contextBlock(ctx)) + roughTokens(history.map((m) => m.content).join('\n'));
-  return estimateCallCost(model, tokens, 300, false);
+export interface CacheStatus {
+  everUsed: boolean; // has this model read this context before
+  expiresAt: number | null; // while the context is probably still cached
+  coldCost: number | null; // what the next question costs once it isn't
+}
+
+// Whether the next question finds its context cached, and what it costs if not.
+// `contextText` only runs when that cost is needed.
+export async function chatCacheStatus(
+  scope: AiScope,
+  ownerId: number,
+  conversationId: number | null,
+  model: string,
+  contextText: () => Promise<string>,
+): Promise<CacheStatus> {
+  const last = await db.lastCacheUse(scope, ownerId, model);
+  const expiresAt = last ? Date.parse(last) + cacheWindowMs(model) : null;
+  if (expiresAt != null && expiresAt > Date.now()) return { everUsed: true, expiresAt, coldCost: null };
+  const history = conversationId != null ? await db.listChatMessages(scope, ownerId, conversationId) : [];
+  const tokens = roughTokens(await contextText()) + roughTokens(history.map((m) => m.content).join('\n'));
+  return { everUsed: last != null, expiresAt: null, coldCost: estimateCallCost(model, tokens, 300, false) };
+}
+
+export function meetingCacheStatus(meetingId: number, conversationId: number | null, model = effectiveModel('summary')): Promise<CacheStatus> {
+  return chatCacheStatus('meeting', meetingId, conversationId, model, async () => contextBlock(await loadMeetingContext(meetingId)));
 }
 
 export function truncationNote(result: AiResult): string {
@@ -136,7 +152,6 @@ export async function summarizeMeeting(meetingId: number, opts: MeetingAiOptions
     },
     { onText: (_delta, text) => opts.onText?.(text) },
   );
-  noteCacheUse(meetingId, result.model);
   const content = normalizeCitations(result.text.trim(), knownSegment(ctx));
   if (!content) throw new Error(result.stopReason === 'refusal' ? 'The model declined to summarise this meeting.' : 'The model returned an empty summary.');
   const doc = await db.saveAiDoc({
@@ -226,10 +241,7 @@ export function toAiMessages(history: ChatMessage[], question: string): AiMessag
 export interface ChatExchange {
   question: ChatMessage;
   answer: ChatMessage;
-  costUsd: number | null;
-  model: string;
   conversationId: number;
-  note: string; // how much came from cache, for the line under the answer
 }
 
 // Asks a question about the meeting with the conversation so far as history. A
@@ -260,14 +272,13 @@ export async function askMeeting(
     },
     { onText: (_delta, text) => opts.onText?.(visibleAnswer(text)) },
   );
-  noteCacheUse(meetingId, result.model);
   const proposal = tasks ? parseProposal(result.text, tasks) : null;
   const text = normalizeCitations(visibleAnswer(result.text).trim(), knownSegment(ctx));
   if (!text && !proposal) throw new Error(result.stopReason === 'refusal' ? 'The model declined to answer.' : 'The model returned an empty answer.');
   const conversationId = opts.conversationId ?? (await db.createConversation('meeting', meetingId, q));
   const saved = await db.addChatMessage('meeting', meetingId, conversationId, 'user', q);
-  const answer = await db.addChatMessage('meeting', meetingId, conversationId, 'assistant', (text || 'Proposed task changes:') + truncationNote(result), proposal);
-  return { question: saved, answer, costUsd: costOf(result), model: result.model, conversationId, note: usageNote(result.usage) };
+  const answer = await db.addChatMessage('meeting', meetingId, conversationId, 'assistant', (text || 'Proposed task changes:') + truncationNote(result), proposal, answerUsage(result));
+  return { question: saved, answer, conversationId };
 }
 
 // True for errors caused by the user stopping a request.

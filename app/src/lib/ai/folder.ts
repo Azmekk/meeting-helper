@@ -9,15 +9,18 @@ import { formatDate, formatDuration, formatTimestamp } from '../format';
 import { getSettings } from '../settings';
 import { type ItemEvidence, normalizeForQuote, triageItem } from './triage';
 import type { ActionItem, ActionItemStatus, AiDoc, ChatMessage, ExtractionTemplate, Folder, Meeting } from '../types';
-import { estimateCost, runAi, usageNote, type AiResult, type AiTool, type AiToolCall } from './index';
+import { effectiveModel, estimateCost, runAi, type AiResult, type AiTool, type AiToolCall } from './index';
 import {
+  answerUsage,
   briefingText,
+  chatCacheStatus,
   contextBlock,
   isAbortError,
   loadMeetingContext,
   onMeetingSummarized,
   toAiMessages,
   truncationNote,
+  type CacheStatus,
   type ChatExchange,
 } from './meeting';
 import { formatTranscript, languageInstruction, toPromptLines } from './prompts';
@@ -522,6 +525,10 @@ async function folderChatContext(folder: Folder): Promise<string> {
     .join('\n\n');
 }
 
+export function folderCacheStatus(folder: Folder, conversationId: number | null, model = effectiveModel('summary')): Promise<CacheStatus> {
+  return chatCacheStatus('folder', folder.id, conversationId, model, () => folderChatContext(folder));
+}
+
 // One chat turn with the folder tools. A null conversation starts a new one.
 // Both turns are saved once the answer is complete, like askMeeting.
 export async function askFolder(
@@ -557,8 +564,8 @@ export async function askFolder(
   if (!text && !proposal) throw new Error(result.stopReason === 'refusal' ? 'The model declined to answer.' : 'The model returned an empty answer.');
   const conversationId = opts.conversationId ?? (await db.createConversation('folder', folderId, q));
   const saved = await db.addChatMessage('folder', folderId, conversationId, 'user', q);
-  const answer = await db.addChatMessage('folder', folderId, conversationId, 'assistant', (text || 'Proposed task changes:') + truncationNote(result), proposal);
-  return { question: saved, answer, costUsd: costOf(result), model: result.model, conversationId, note: usageNote(result.usage) };
+  const answer = await db.addChatMessage('folder', folderId, conversationId, 'assistant', (text || 'Proposed task changes:') + truncationNote(result), proposal, answerUsage(result));
+  return { question: saved, answer, conversationId };
 }
 
 // ---------- Automatic updates ----------

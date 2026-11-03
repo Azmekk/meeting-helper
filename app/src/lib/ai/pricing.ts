@@ -95,9 +95,3 @@ export function cachedPercent(usage: AiUsage): number | null {
   const total = usage.inputTokens + usage.cachedInputTokens + usage.cacheWriteTokens;
   return total ? Math.round((100 * usage.cachedInputTokens) / total) : null;
 }
-
-// "94% cached", for the line under an answer.
-export function usageNote(usage: AiUsage): string {
-  const pct = cachedPercent(usage);
-  return pct == null ? '' : `${pct}% cached`;
-}

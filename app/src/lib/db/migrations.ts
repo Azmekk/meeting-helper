@@ -171,6 +171,12 @@ export const MIGRATIONS: MigrationStep[][] = [
     (d) => addColumn(d, 'action_items', 'parent_id', 'INTEGER'),
     backfillConversations,
   ],
+  // v7: what each chat answer cost, kept for its line and the conversation total
+  [
+    (d) => addColumn(d, 'chat_messages', 'model', 'TEXT'),
+    (d) => addColumn(d, 'chat_messages', 'cost_usd', 'REAL'),
+    (d) => addColumn(d, 'chat_messages', 'cached_percent', 'INTEGER'),
+  ],
 ];
 
 // SQLite has no ADD COLUMN IF NOT EXISTS; check first so re-runs are safe.

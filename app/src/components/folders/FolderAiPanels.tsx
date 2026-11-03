@@ -4,17 +4,17 @@
 import { TermsField } from '../TermsField';
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
 import { AiModelSelect, rememberAiModel, useAiModel } from '../ai/AiModelSelect';
-import { ConversationBar, ProposalCard, useConversations } from '../ai/ChatParts';
+import { ChatCacheLine, ConversationBar, ProposalCard, answerMeta, useCacheStatus, useConversations } from '../ai/ChatParts';
 import { SummaryHistoryControls, useSummaryHistory } from '../ai/SummaryHistory';
 import { ArrowUp, MessageSquare, RefreshCw, Search, Square } from 'lucide-react';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button, Callout, Card, Modal, Spinner, Textarea, clsx, errorMessage, toast } from '../ui';
 import { ChatBubble, NoKeyNotice, useAbortable, useAiKey } from '../meeting/AiPanels';
 import { AiMarkdown, type CiteProps } from '../meeting/AiMarkdown';
 import * as db from '../../lib/db';
 import { citedIds } from '../../lib/ai/prompts';
-import { askFolder, rebuildFolderSummary, useFolderAi } from '../../lib/ai/folder';
+import { askFolder, folderCacheStatus, rebuildFolderSummary, useFolderAi } from '../../lib/ai/folder';
 import { isAbortError } from '../../lib/ai/meeting';
 import { formatDate, formatUsd } from '../../lib/format';
 import { refreshFolders } from '../../lib/folders';
@@ -176,7 +176,6 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<{ question: string; text: string; tool: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [costs, setCosts] = useState<Record<number, string>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const { start, stop } = useAbortable();
@@ -188,6 +187,9 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
     const el = listRef.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [messages, pending]);
+
+  const loadCache = useCallback(() => folderCacheStatus(folder, chat.activeId, model), [folder, chat.activeId, model]);
+  const cache = useCacheStatus(loadCache, !!hasKey, pending);
 
   const send = async (text = input) => {
     const question = text.trim();
@@ -210,7 +212,6 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
       });
       rememberAiModel(`chat:folder:${ex.conversationId}`, model);
       await chat.add(ex);
-      setCosts((c) => ({ ...c, [ex.answer.id]: [ex.model, formatUsd(ex.costUsd), ex.note].filter(Boolean).join(' · ') }));
     } catch (err) {
       setInput((cur) => cur || question);
       if (!isAbortError(err)) setError(errorMessage(err));
@@ -233,7 +234,7 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
   return (
     <Card
       title="Chat"
-      description="Ask across every meeting in this folder. The AI searches the transcripts and links to the lines it uses."
+      description="Ask across every meeting in this folder."
       padded={false}
       actions={
         <>
@@ -265,7 +266,7 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
         )}
         {messages.map((m) => (
           <div key={m.id}>
-            <ChatBubble role={m.role} text={m.content} meta={costs[m.id]} cite={cite} />
+            <ChatBubble role={m.role} text={m.content} meta={answerMeta(m)} cite={cite} />
             {m.proposal && <ProposalCard message={m} folderId={folder.id} meetingId={null} onChange={chat.setProposal} />}
           </div>
         ))}
@@ -290,6 +291,7 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
             <p className="break-words">{shownError}</p>
           </Callout>
         )}
+        <ChatCacheLine status={cache} conversation={chat.conversations.find((c) => c.id === chat.activeId)} />
         {!hasKey && (
           <p className="mb-2 text-[13px] text-muted">
             Add an AI key in{' '}
