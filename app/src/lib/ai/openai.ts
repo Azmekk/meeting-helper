@@ -151,9 +151,13 @@ function makeProvider(flavor: Flavor): AiProvider {
         messages.push({ role: 'system', content: [...(req.context ?? []), req.contextTail ?? ''].filter(Boolean).join('\n') });
       }
       messages.push({ role: 'system', content: system });
+      // A request writes at most four breakpoints, the latest ones, so marking every
+      // question drops the context's and other chats can't reuse it. The second-last
+      // question is where the previous turn's prefix ends.
+      const markedQuestions = new Set(req.messages.flatMap((m, i) => (m.role === 'user' ? [i] : [])).slice(-2));
       req.messages.forEach((m, i) => {
         const last = i === req.messages.length - 1;
-        if (breakpoints && req.conversation && m.role === 'user') {
+        if (breakpoints && req.conversation && markedQuestions.has(i)) {
           const parts: OpenAI.Chat.Completions.ChatCompletionContentPartText[] = [{ type: 'text', text: m.content, ...BREAKPOINT }];
           if (last && req.turnContext) parts.push({ type: 'text', text: req.turnContext });
           messages.push({ role: 'user', content: parts });
