@@ -408,7 +408,7 @@ export function MediaPlayer({
         }}
         className={clsx(
           'cursor-pointer bg-black',
-          overVideo ? (fullscreen ? 'block h-screen w-full' : 'block aspect-video max-h-[calc(100vh-47.5rem)] min-h-56 w-full') : 'h-14 w-24 shrink-0 rounded-xl object-cover',
+          overVideo ? (fullscreen ? 'block h-screen w-full' : 'block aspect-video max-h-[calc(100vh-33.5rem)] min-h-56 w-full') : 'h-14 w-24 shrink-0 rounded-xl object-cover',
         )}
       />
 

@@ -634,7 +634,7 @@ export default function MeetingScreen() {
   const segmentCount = detail?.segments.length ?? 0;
 
   return (
-    <div className="mx-auto flex max-w-7xl flex-col px-8 pt-6 pb-4 xl:h-screen">
+    <div className="mx-auto flex max-w-7xl flex-col px-8 pt-6 pb-4 xl:h-screen xl:pb-0">
       <MeetingHeader
         meeting={meeting}
         job={job}
@@ -684,7 +684,7 @@ export default function MeetingScreen() {
       </div>
 
       {/* Each menu sits directly above its own panel, so both rows line up. */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 xl:min-h-[30rem] xl:grid-cols-[minmax(0,1fr)_400px] xl:grid-rows-[minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 xl:min-h-[31rem] xl:border-b-16 xl:border-transparent xl:grid-cols-[minmax(0,1fr)_400px] xl:grid-rows-[minmax(0,1fr)]">
         {/* Main: status + transcript, summary, chat */}
         <section className="flex min-h-0 min-w-0 flex-col max-xl:h-[75vh]">
           {busy && <ProcessingPanel job={job} />}
