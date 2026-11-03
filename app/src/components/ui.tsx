@@ -710,6 +710,7 @@ export function Card({
   actions,
   children,
   className,
+  bodyClassName,
   padded = true,
   open,
 }: {
@@ -718,12 +719,13 @@ export function Card({
   actions?: ReactNode;
   children?: ReactNode;
   className?: string;
+  bodyClassName?: string;
   padded?: boolean;
   // Makes the body collapsible: false folds it away (animated), leaving the header.
   open?: boolean;
 }) {
   const collapsible = open !== undefined;
-  const bodyClass = clsx(padded && (title || actions ? 'px-5 pt-3 pb-5' : 'p-5'));
+  const bodyClass = clsx(padded && (title || actions ? 'px-5 pt-3 pb-5' : 'p-5'), bodyClassName);
   return (
     <section className={clsx('surface rounded-card', className)}>
       {(title || actions) && (

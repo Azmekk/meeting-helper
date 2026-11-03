@@ -90,6 +90,17 @@ function writePref(key: string, value: string): void {
   }
 }
 
+// Centers a line inside the transcript's own scroll area, leaving the page, and
+// so the player, where it is. Does nothing while the transcript tab is hidden.
+function scrollToSegment(segId: number) {
+  const row = document.querySelector<HTMLElement>(`[data-seg="${segId}"]`);
+  const box = row?.closest<HTMLElement>('[data-transcript-scroll]');
+  if (!row || !box || !box.offsetParent) return;
+  const r = row.getBoundingClientRect();
+  const b = box.getBoundingClientRect();
+  box.scrollTo({ top: box.scrollTop + r.top - b.top - (b.height - r.height) / 2, behavior: 'smooth' });
+}
+
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
   const tag = el.tagName;
@@ -189,6 +200,7 @@ export default function MeetingScreen() {
 
   useEffect(() => {
     setMeeting(undefined);
+    setFollow(true);
     setDetail(null);
     setActiveId(null);
     setTab('transcript');
@@ -248,27 +260,23 @@ export default function MeetingScreen() {
     setActiveId((cur) => (cur === id ? cur : id));
   }, []);
 
-  // Follow playback: keep the active segment in view while playing.
+  // Follow playback: keep the current line in view, also after a seek while
+  // paused and on coming back to the transcript tab.
   useEffect(() => {
-    if (!follow || activeId == null) return;
-    const el = mediaRef.current;
-    if (!el || el.paused) return;
+    if (!follow || activeId == null || tab !== 'transcript') return;
     if (isTypingTarget(document.activeElement)) return;
-    document.querySelector(`[data-seg="${activeId}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, [activeId, follow]);
+    scrollToSegment(activeId);
+  }, [activeId, follow, tab]);
 
   const jumpToPlayback = () => {
     setFollow(true);
-    if (activeId != null)
-      document.querySelector(`[data-seg="${activeId}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (activeId != null) scrollToSegment(activeId);
   };
 
   // Briefly highlights a segment and scrolls it into view.
   const flashSegment = useCallback((segId: number) => {
     setFlashId(segId);
-    requestAnimationFrame(() =>
-      document.querySelector(`[data-seg="${segId}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
-    );
+    requestAnimationFrame(() => scrollToSegment(segId));
     setTimeout(() => setFlashId((cur) => (cur === segId ? null : cur)), 4000);
   }, []);
 
@@ -296,7 +304,6 @@ export default function MeetingScreen() {
         const seg = segById.get(segId);
         if (!seg) return;
         setCitedId(segId);
-        setFollow(false);
         seek(seg.startMs, true);
       },
     }),
@@ -352,9 +359,7 @@ export default function MeetingScreen() {
       setMatchIndex(i);
       setFollow(false);
       seek(seg.startMs, false);
-      requestAnimationFrame(() =>
-        document.querySelector(`[data-seg="${seg.id}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
-      );
+      requestAnimationFrame(() => scrollToSegment(seg.id));
     },
     [matches, seek],
   );
@@ -516,13 +521,7 @@ export default function MeetingScreen() {
     setAskDraft({ text: `About the task "${item.text}" (id ${item.id}): `, nonce: Date.now() });
   }, []);
 
-  const seekFromTask = useCallback(
-    (ms: number) => {
-      setFollow(false);
-      seek(ms, true);
-    },
-    [seek],
-  );
+  const seekFromTask = useCallback((ms: number) => seek(ms, true), [seek]);
 
   const moveToFolder = async (target: number | null) => {
     try {
@@ -635,7 +634,7 @@ export default function MeetingScreen() {
   const segmentCount = detail?.segments.length ?? 0;
 
   return (
-    <div className="mx-auto max-w-7xl px-8 py-8">
+    <div className="mx-auto flex max-w-7xl flex-col px-8 pt-6 pb-4 xl:h-screen">
       <MeetingHeader
         meeting={meeting}
         job={job}
@@ -660,7 +659,8 @@ export default function MeetingScreen() {
         </Callout>
       )}
 
-      <div className="mb-4 space-y-4">
+      {/* On narrow windows the panels stack, so the mini player stays on top. */}
+      <div className={clsx('mb-3 shrink-0 space-y-4', !videoExpanded && 'max-xl:sticky max-xl:top-0 max-xl:z-30')}>
         {meeting.mediaPath ? (
           <MediaPlayer
             path={meeting.mediaPath}
@@ -684,9 +684,9 @@ export default function MeetingScreen() {
       </div>
 
       {/* Each menu sits directly above its own panel, so both rows line up. */}
-      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 xl:min-h-64 xl:grid-cols-[minmax(0,1fr)_400px] xl:grid-rows-[minmax(0,1fr)]">
         {/* Main: status + transcript, summary, chat */}
-        <section className="min-w-0">
+        <section className="flex min-h-0 min-w-0 flex-col max-xl:h-[75vh]">
           {busy && <ProcessingPanel job={job} />}
 
           {meeting.status === 'error' && !busy && (
@@ -745,29 +745,29 @@ export default function MeetingScreen() {
               value={tab}
               onChange={setTab}
               options={RIGHT_TABS.map((t) => ({ value: t.id, label: t.label, icon: t.icon }))}
-              className="mb-4 flex w-full [&>button]:flex-1"
+              className="mb-3 flex w-full [&>button]:flex-1"
             />
           )}
 
           {/* AI panels stay mounted while hidden so a running request survives tab switches. */}
           {detail && (
-            <div className={clsx(tab === 'transcript' && 'hidden')}>
+            <div className={clsx('min-h-0 flex-1 flex-col', tab === 'transcript' ? 'hidden' : 'flex')}>
               {citedTarget && (
                 <CitedLine target={citedTarget} onShow={showCitedInTranscript} onClose={() => setCitedId(null)} />
               )}
-              <div className={clsx(tab !== 'summary' && 'hidden')}>
+              <div className={clsx('min-h-0 flex-1 overflow-y-auto', tab !== 'summary' && 'hidden')}>
                 <SummaryPanel meetingId={meetingId} hasText={segmentCount > 0} cite={cite} />
               </div>
-              <div className={clsx(tab !== 'chat' && 'hidden')}>
+              <div className={clsx('min-h-0 flex-1 flex-col', tab === 'chat' ? 'flex' : 'hidden')}>
                 <ChatPanel meetingId={meetingId} folderId={folderId} hasText={segmentCount > 0} cite={cite} draft={askDraft} />
               </div>
             </div>
           )}
 
           {detail && (
-            <div className={clsx(tab !== 'transcript' && 'hidden')}>
+            <div className={clsx('min-h-0 flex-1 flex-col', tab === 'transcript' ? 'flex' : 'hidden')}>
               {/* Follow playback wraps to a second row when the column is too narrow. */}
-              <div className="surface sticky top-2 z-20 mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[22px] py-1.5 pr-2 pl-4">
+              <div className="surface mb-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-[22px] py-1.5 pr-2 pl-4">
                 <div className="text-[13px] whitespace-nowrap text-muted">
                   {segmentCount} segment{segmentCount === 1 ? '' : 's'}
                 </div>
@@ -869,15 +869,16 @@ export default function MeetingScreen() {
         </section>
 
         {/* Side: progress, speakers, briefing, terms */}
-        <aside className="min-w-0 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto xl:pb-2">
+        <aside className="flex min-h-0 min-w-0 flex-col">
           <Segmented
             role="tablist"
             label="Meeting details"
             value={sideTab}
             onChange={setSideTab}
             options={SIDE_TABS.map((t) => ({ value: t.id, label: t.label, icon: t.icon }))}
-            className="mb-4 flex w-full [&>button]:flex-1 [&>button]:px-2"
+            className="mb-3 flex w-full shrink-0 [&>button]:flex-1 [&>button]:px-2"
           />
+          <div className="min-h-0 flex-1 overflow-y-auto">
           {sideTab === 'progress' &&
             (meeting.folderId != null && folders.some((f) => f.id === meeting.folderId) ? (
               <ProgressPanel
@@ -913,6 +914,7 @@ export default function MeetingScreen() {
             ))}
           {sideTab === 'briefing' && <BriefingCard meeting={meeting} onSaved={(briefing) => setMeeting((m) => (m ? { ...m, briefing } : m))} />}
           {sideTab === 'terms' && <TermsCard meeting={meeting} onSaved={(terms) => setMeeting((m) => (m ? { ...m, terms } : m))} />}
+          </div>
         </aside>
       </div>
 

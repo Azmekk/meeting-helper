@@ -277,6 +277,8 @@ export function ChatPanel({
       title="Chat"
       description="Ask anything about this meeting. Answers link to the lines they come from."
       padded={false}
+      className="flex min-h-0 flex-1 flex-col"
+      bodyClassName="flex min-h-0 flex-1 flex-col"
       actions={
         <>
           <AiLanguageSelect />
@@ -291,7 +293,7 @@ export function ChatPanel({
           const el = e.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
-        className="max-h-[calc(100vh-20rem)] min-h-40 space-y-4 overflow-y-auto px-6 py-5"
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5"
       >
         {!messages.length && !pending && (
           <div className="flex flex-col items-center gap-3 py-6 text-center">

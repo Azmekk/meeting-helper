@@ -107,8 +107,16 @@ export function TranscriptEditor({
   }
 
   return (
-    <div onWheel={onUserScroll} onTouchMove={onUserScroll} className="pb-[30vh]">
-      <div className="surface rounded-card px-3 pt-1 pb-3">
+    <div
+      data-transcript-scroll
+      onWheel={onUserScroll}
+      onTouchMove={onUserScroll}
+      // Pressed on the box itself means its scrollbar.
+      onPointerDown={(e) => {
+        if (e.target === e.currentTarget) onUserScroll();
+      }}
+      className="surface min-h-0 flex-1 overflow-y-auto rounded-card px-3 pt-3 pb-24"
+    >
       {visible.map(({ seg, showSpeaker, isLast }) => (
         <SegmentRow
           key={seg.id}
@@ -127,7 +135,6 @@ export function TranscriptEditor({
           tools={tools}
         />
       ))}
-      </div>
       {prompt}
     </div>
   );
