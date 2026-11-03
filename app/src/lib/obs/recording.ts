@@ -23,6 +23,7 @@ import {
   PROFILE_KEYS,
   refreshOutput,
   refreshSetup,
+  switchToAudioScene,
 } from './setup';
 import { useRecorder } from './store';
 
@@ -35,6 +36,8 @@ const handledPaths = new Set<string>();
 const heldPaths = new Set<string>();
 // Set right before our own StartRecord, so the STARTED event knows the recording is ours.
 let appStarting = false;
+// This recording keeps only its audio when it's imported.
+let audioOnlyRun = false;
 
 export function watchRecording(): void {
   obs.on('RecordStateChanged', (e) => {
@@ -64,7 +67,10 @@ export async function syncRecordStatus(): Promise<boolean> {
   const ext = get().externalRecording;
   if (!status.outputActive && ext && !ext.stopped) set({ externalRecording: null });
   // Undo a record path left pointing at a meeting directory (app closed mid-recording).
-  if (!status.outputActive) await restoreRecordPath();
+  if (!status.outputActive) {
+    await restoreRecordPath();
+    await restoreScene();
+  }
   return !!status.outputActive;
 }
 
@@ -118,6 +124,7 @@ function onRecordState(state: string, outputPath: string | null) {
     case 'OBS_WEBSOCKET_OUTPUT_STOPPED':
       set({ recording: false, startedAt: null, paused: false, pausedAt: null, busy: null, recordingPath: null });
       void restoreRecordPath();
+      void restoreScene();
       onRecordingEnded(outputPath);
       break;
   }
@@ -333,7 +340,9 @@ async function handleFinishedRecording(path: string) {
       set({ lastIngest: { title, path: file, status: 'processing' } });
     }
 
-    const meetingId = await ingestMedia(file, title, { fromRecording: true, meetingId: row?.id });
+    const audioOnly = audioOnlyRun;
+    audioOnlyRun = false;
+    const meetingId = await ingestMedia(file, title, { fromRecording: true, meetingId: row?.id, audioOnly });
     set({ lastIngest: { title, path: file, status: 'done', meetingId } });
     toast(`“${title}” saved to Meetings.`, 'success');
     await offerFinished(meetingId);
@@ -454,6 +463,8 @@ export async function startRecording(): Promise<void> {
     if (scene && get().scenes.includes(scene) && get().currentScene !== scene) {
       await obs.call('SetCurrentProgramScene', { sceneName: scene });
     }
+    audioOnlyRun = getSettings().recordAudioOnly;
+    if (audioOnlyRun) saveSceneToRestore(await switchToAudioScene());
     await prepareMeetingDir();
     appStarting = true;
     await obs.call('StartRecord');
@@ -461,9 +472,11 @@ export async function startRecording(): Promise<void> {
     discardIfNeverStarted();
   } catch (err) {
     appStarting = false;
+    audioOnlyRun = false;
     set({ busy: null });
     await discardPreparedRow();
     await restoreRecordPath();
+    await restoreScene();
     throw err;
   }
 }
@@ -478,6 +491,7 @@ export async function stopRecording(): Promise<void> {
     if (res.outputPath) {
       set({ recording: false, startedAt: null, paused: false, pausedAt: null, busy: null, recordingPath: null });
       void restoreRecordPath();
+      void restoreScene();
       onRecordingEnded(res.outputPath);
     }
   } catch (err) {
@@ -494,6 +508,38 @@ export async function pauseRecording(): Promise<void> {
 export async function resumeRecording(): Promise<void> {
   requireConnected();
   await obs.call('ResumeRecord');
+}
+
+// ---------- The scene to go back to after an audio-only recording ----------
+//
+// Kept in localStorage, so a scene left switched by a crash is restored on next
+// connect, like the record path below.
+
+const SCENE_RESTORE_KEY = 'obsSceneToRestore';
+
+function saveSceneToRestore(scene: string | null) {
+  try {
+    if (scene) localStorage.setItem(SCENE_RESTORE_KEY, scene);
+    else localStorage.removeItem(SCENE_RESTORE_KEY);
+  } catch {
+    /* worst case OBS stays on the empty scene after a crash */
+  }
+}
+
+async function restoreScene(): Promise<void> {
+  let scene: string | null = null;
+  try {
+    scene = localStorage.getItem(SCENE_RESTORE_KEY);
+  } catch {
+    return;
+  }
+  if (!scene || !get().connected) return;
+  try {
+    await obs.call('SetCurrentProgramScene', { sceneName: scene });
+  } catch (err) {
+    console.warn('Could not switch OBS back to its scene', err);
+  }
+  saveSceneToRestore(null);
 }
 
 // ---------- Recording into the meeting's directory ----------

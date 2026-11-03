@@ -7,7 +7,7 @@ import { custom, deepseek, openai } from './openai';
 import type { AiAuth, AiEffort, AiProvider, AiProviderId, AiRequest, AiResult, AiStreamHandlers, AiTask } from './types';
 
 export * from './types';
-export { estimateCallCost, estimateCost, priceFor, roughTokens } from './pricing';
+export { cacheWindowMs, cachedPercent, estimateCallCost, estimateCost, priceFor, roughTokens, usageNote } from './pricing';
 
 export const AI_PROVIDERS: Record<AiProviderId, AiProvider> = { anthropic, openai, deepseek, custom };
 
@@ -79,19 +79,27 @@ export function pickerModels(provider: AiProvider, ids: string[], settings: Sett
   return sortModels(provider, shown);
 }
 
-// Live calls must be quick; summaries can think longer.
-const TASK_EFFORT: Record<AiTask, AiEffort> = { live: 'fast', answer: 'normal', summary: 'deep' };
+// Notes must be quick. Everything reading a saved meeting uses one level, since
+// a different effort can stop those calls sharing the cached transcript.
+const TASK_EFFORT: Record<AiTask, AiEffort> = { live: 'fast', answer: 'normal', summary: 'normal', background: 'normal' };
 
-const TASK_SETTING: Record<AiTask, 'aiLiveModel' | 'aiAnswerModel' | 'aiSummaryModel'> = {
+const TASK_SETTING: Record<AiTask, 'aiLiveModel' | 'aiAnswerModel' | 'aiSummaryModel' | 'aiBackgroundModel'> = {
   live: 'aiLiveModel',
   answer: 'aiAnswerModel',
   summary: 'aiSummaryModel',
+  background: 'aiBackgroundModel',
 };
 
-// The model to use for a task: the setting, or the provider's recommended
-// model when it's blank. '' for a custom endpoint with nothing chosen.
+// Tasks that run by themselves default to the provider's cheapest model.
+export function recommendedModel(task: AiTask, provider: AiProvider): string {
+  const { default: d, budget } = provider.recommendedModels;
+  return task === 'live' || task === 'background' ? budget || d : d;
+}
+
+// The model to use for a task: the setting, or the recommended model when it's
+// blank. '' for a custom endpoint with nothing chosen.
 export function effectiveModel(task: AiTask, settings: Settings = getSettings()): string {
-  return settings[TASK_SETTING[task]] || getAiProvider(settings.aiProvider).recommendedModels.default;
+  return settings[TASK_SETTING[task]] || recommendedModel(task, getAiProvider(settings.aiProvider));
 }
 
 export async function getAiAuth(id: AiProviderId, settings: Settings = getSettings()): Promise<AiAuth> {

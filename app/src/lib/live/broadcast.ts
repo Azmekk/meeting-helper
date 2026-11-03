@@ -33,6 +33,8 @@ export function getLiveSnapshot(): LiveSnapshot {
     notesContext: getSettings().liveNotesContext,
     notesCostEstimate: notesCostEstimate(models.live),
     aiCostUsd: s.aiCostUsd,
+    aiCachedPercent: s.aiPromptTokens ? Math.round((100 * s.aiCachedTokens) / s.aiPromptTokens) : null,
+    notesIntervalMin: getSettings().liveNotesIntervalMin,
     hotkey: getSettings().liveHotkey,
   };
 }

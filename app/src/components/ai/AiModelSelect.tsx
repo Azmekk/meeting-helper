@@ -1,18 +1,45 @@
 // Model picker shown next to AI actions. Unlike AiLanguageSelect it applies to
-// that panel only: the summary model in Settings → AI stays the default.
+// that panel only: the model in Settings → AI stays the default.
 import { Bot } from 'lucide-react';
 import { useState } from 'react';
-import { effectiveModel } from '../../lib/ai';
+import { effectiveModel, type AiTask } from '../../lib/ai';
 import { useLive } from '../../lib/live';
 import { useSettings } from '../../lib/settings';
 import { Select, clsx } from '../ui';
 
-// Model ids differ per provider, so a choice only holds for the provider it was made under.
-export function useAiModel(): [string, (model: string) => void] {
+const STORAGE_KEY = 'ai-model-choices';
+
+function readChoices(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+// Keeps a choice under a new name, e.g. when a new chat gets its id.
+export function rememberAiModel(memory: string, model: string): void {
+  const provider = useSettings.getState().settings.aiProvider;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...readChoices(), [`${provider}:${memory}`]: model }));
+  } catch {
+    /* only a convenience */
+  }
+}
+
+// Choices outlive the panel: losing one silently switches model, and a model
+// can't reuse another's prompt cache. `memory` names what the choice belongs to
+// (a conversation, a panel). Model ids differ per provider, so a choice only
+// holds for the provider it was made under.
+export function useAiModel(task: AiTask = 'summary', memory: string = task): [string, (model: string) => void] {
   const provider = useSettings((s) => s.settings.aiProvider);
-  const fallback = useSettings((s) => effectiveModel('summary', s.settings));
-  const [chosen, setChosen] = useState<{ provider: string; model: string } | null>(null);
-  return [chosen?.provider === provider ? chosen.model : fallback, (model) => setChosen({ provider, model })];
+  const fallback = useSettings((s) => effectiveModel(task, s.settings));
+  const [, rerender] = useState(0);
+  const setModel = (model: string) => {
+    rememberAiModel(memory, model);
+    rerender((n) => n + 1);
+  };
+  return [readChoices()[`${provider}:${memory}`] ?? fallback, setModel];
 }
 
 export function AiModelSelect({

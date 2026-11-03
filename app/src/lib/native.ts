@@ -50,6 +50,11 @@ export function remuxToMp4(args: { input: string; output: string; ffmpegPath: st
   return invoke('remux_to_mp4', args);
 }
 
+// Drops the video and keeps every audio track, in an .m4a.
+export function remuxAudioOnly(args: { input: string; output: string; ffmpegPath: string }): Promise<void> {
+  return invoke('remux_audio_only', args);
+}
+
 // Streams a local file to a multipart/form-data endpoint. Used for audio
 // uploads, which are too large and too slow for the webview fetch.
 export function uploadMultipart(args: {

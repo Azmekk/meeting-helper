@@ -3,9 +3,10 @@
 // opens that meeting at the cited line.
 import { TermsField } from '../TermsField';
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
-import { AiModelSelect, useAiModel } from '../ai/AiModelSelect';
+import { AiModelSelect, rememberAiModel, useAiModel } from '../ai/AiModelSelect';
+import { ConversationBar, ProposalCard, useConversations } from '../ai/ChatParts';
 import { SummaryHistoryControls, useSummaryHistory } from '../ai/SummaryHistory';
-import { ArrowUp, MessageSquare, RefreshCw, Search, Square, Trash2 } from 'lucide-react';
+import { ArrowUp, MessageSquare, RefreshCw, Search, Square } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button, Callout, Card, Modal, Spinner, Textarea, clsx, errorMessage, toast } from '../ui';
@@ -17,7 +18,7 @@ import { askFolder, rebuildFolderSummary, useFolderAi } from '../../lib/ai/folde
 import { isAbortError } from '../../lib/ai/meeting';
 import { formatDate, formatUsd } from '../../lib/format';
 import { refreshFolders } from '../../lib/folders';
-import type { ChatMessage, Folder } from '../../lib/types';
+import type { Folder } from '../../lib/types';
 
 // Loads the segments cited anywhere in `texts` (any meeting) for CiteChip.
 export function useFolderCites(texts: string[]): CiteProps {
@@ -55,7 +56,7 @@ export function useFolderCites(texts: string[]): CiteProps {
 
 export function FolderSummaryPanel({ folder }: { folder: Folder }) {
   const hasKey = useAiKey();
-  const [model, setModel] = useAiModel();
+  const [model, setModel] = useAiModel('background', 'folder-summary');
   const autoBusy = useFolderAi((s) => s.busy[folder.id]);
   const { docs, doc, select, showNewest, reload, loadError } = useSummaryHistory('folder', folder.id, 'folder_summary');
   const [streaming, setStreaming] = useState<string | null>(null);
@@ -169,26 +170,16 @@ const TOOL_LABEL: Record<string, string> = {
 
 export function FolderChatPanel({ folder }: { folder: Folder }) {
   const hasKey = useAiKey();
-  const [model, setModel] = useAiModel();
-  const [messages, setMessages] = useState<ChatMessage[] | undefined>(undefined);
+  const chat = useConversations('folder', folder.id);
+  const { messages } = chat;
+  const [model, setModel] = useAiModel('summary', `chat:folder:${chat.activeId ?? folder.id}`);
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<{ question: string; text: string; tool: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [costs, setCosts] = useState<Record<number, string>>({});
-  const [confirmClear, setConfirmClear] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const { start, stop } = useAbortable();
-
-  useEffect(() => {
-    setMessages(undefined);
-    db.listChatMessages('folder', folder.id)
-      .then(setMessages)
-      .catch((err) => {
-        setMessages([]);
-        setError(errorMessage(err));
-      });
-  }, [folder.id]);
 
   const texts = useMemo(() => [...(messages ?? []).map((m) => m.content), pending?.text ?? ''], [messages, pending?.text]);
   const cite = useFolderCites(texts);
@@ -210,30 +201,21 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
       const ex = await askFolder(folder.id, question, {
         signal,
         model,
+        conversationId: chat.activeId,
         onText: (t) => setPending((p) => (p ? { ...p, text: t, tool: null } : p)),
         onTool: (call) => {
           const q = typeof call.input.query === 'string' ? `: ${call.input.query}` : '';
           setPending((p) => (p ? { ...p, tool: `${TOOL_LABEL[call.name] ?? call.name}${q}` } : p));
         },
       });
-      setMessages((m) => [...(m ?? []), ex.question, ex.answer]);
-      setCosts((c) => ({ ...c, [ex.answer.id]: `${ex.model} · ${formatUsd(ex.costUsd)}` }));
+      rememberAiModel(`chat:folder:${ex.conversationId}`, model);
+      await chat.add(ex);
+      setCosts((c) => ({ ...c, [ex.answer.id]: [ex.model, formatUsd(ex.costUsd), ex.note].filter(Boolean).join(' · ') }));
     } catch (err) {
       setInput((cur) => cur || question);
       if (!isAbortError(err)) setError(errorMessage(err));
     } finally {
       setPending(null);
-    }
-  };
-
-  const clear = async () => {
-    try {
-      await db.clearChat('folder', folder.id);
-      setMessages([]);
-      setCosts({});
-      setConfirmClear(false);
-    } catch (err) {
-      toast(`Couldn't clear the chat: ${errorMessage(err)}`, 'error');
     }
   };
 
@@ -246,6 +228,7 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
   }
   if (!hasKey && !messages.length) return <NoKeyNotice />;
   const canSend = hasKey && !pending;
+  const shownError = error ?? chat.loadError;
 
   return (
     <Card
@@ -256,14 +239,10 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
         <>
           <AiLanguageSelect />
           <AiModelSelect value={model} onChange={setModel} disabled={!!pending} />
-          {messages.length > 0 && (
-            <Button size="sm" variant="ghost" icon={Trash2} disabled={!!pending} onClick={() => setConfirmClear(true)}>
-              Clear chat
-            </Button>
-          )}
         </>
       }
     >
+      <ConversationBar conversations={chat.conversations} activeId={chat.activeId} disabled={!!pending} onOpen={(id) => void chat.open(id)} onDelete={chat.remove} />
       <div
         ref={listRef}
         onScroll={(e) => {
@@ -285,7 +264,10 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
           </div>
         )}
         {messages.map((m) => (
-          <ChatBubble key={m.id} role={m.role} text={m.content} meta={costs[m.id]} cite={cite} />
+          <div key={m.id}>
+            <ChatBubble role={m.role} text={m.content} meta={costs[m.id]} cite={cite} />
+            {m.proposal && <ProposalCard message={m} folderId={folder.id} meetingId={null} onChange={chat.setProposal} />}
+          </div>
         ))}
         {pending && (
           <>
@@ -303,9 +285,9 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
       </div>
 
       <div className="border-t border-line px-5 py-3">
-        {error && (
+        {shownError && (
           <Callout tone="error" className="mb-3">
-            <p className="break-words">{error}</p>
+            <p className="break-words">{shownError}</p>
           </Callout>
         )}
         {!hasKey && (
@@ -344,23 +326,6 @@ export function FolderChatPanel({ folder }: { folder: Folder }) {
         </div>
       </div>
 
-      <Modal
-        open={confirmClear}
-        onClose={() => setConfirmClear(false)}
-        title="Clear chat?"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setConfirmClear(false)}>
-              Cancel
-            </Button>
-            <Button variant="danger" icon={Trash2} onClick={clear}>
-              Clear
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-muted">This deletes all questions and answers for this folder.</p>
-      </Modal>
     </Card>
   );
 }

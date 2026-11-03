@@ -13,7 +13,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { LogicalSize, PhysicalPosition, getCurrentWindow } from '@tauri-apps/api/window';
-import { Check, ChevronDown, ChevronUp, Ellipsis, Lightbulb, MessageSquareText, Mic, MicOff, QrCode as QrIcon, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Ellipsis, Lightbulb, MessageSquareText, Mic, MicOff, QrCode as QrIcon, RefreshCw, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { LineView, PartialView, PlainMarkdown, TASK_LABEL, costLabel, hotkeyLabel } from '../components/live/shared';
 import { OUTPUT_LANGUAGES } from '../components/ai/AiLanguageSelect';
@@ -304,7 +304,7 @@ export default function OverlayScreen() {
             ))}
             <div className="flex items-center gap-2 border-t border-white/10 pt-2 text-[12px]">
               <span className="flex-1 text-[#8e8e93]">
-                {snap.aiCostUsd > 0 ? `AI this meeting ${costLabel(snap.aiCostUsd)}` : ''}
+                {snap.aiCostUsd > 0 ? `AI this meeting ${costLabel(snap.aiCostUsd)}${snap.aiCachedPercent != null ? ` · ${snap.aiCachedPercent}% cached` : ''}` : ''}
               </span>
               <button type="button" onClick={closeOverlay} className="ov-action h-7! hover:text-[#ff6961]!">
                 <X size={13} /> Close overlay
@@ -333,6 +333,18 @@ export default function OverlayScreen() {
                   </span>
                 )}
                 <span className="flex-1" />
+                {notesTab === 'notes' && (
+                  <button
+                    type="button"
+                    aria-label="Update notes now"
+                    title="Update notes now"
+                    disabled={!snap?.lineCount || snap?.notesBusy}
+                    onClick={() => void emit('live://refresh-notes', {})}
+                    className="ov-icon h-6 w-6 transition-colors disabled:opacity-40"
+                  >
+                    <RefreshCw size={13} />
+                  </button>
+                )}
                 <Presence show motion="fade" exitMs={OV_EXIT_MS}>
                   <div className="flex rounded-full bg-white/8 p-0.5 text-[11px]">
                     {(['notes', 'transcript'] as const).map((t) => (

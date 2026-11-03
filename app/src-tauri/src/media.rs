@@ -394,6 +394,42 @@ pub fn remux_to_mp4_impl(input: &Path, output: &Path, ffmpeg_path: &str) -> Resu
     }
 }
 
+// Keeps every audio track and drops the video, for audio-only recordings.
+pub fn remux_audio_only_impl(input: &Path, output: &Path, ffmpeg_path: &str) -> Result<(), String> {
+    require_file(input)?;
+    let tools = Tools::resolve(ffmpeg_path);
+    ensure_parent(output)?;
+
+    let build = |codec_args: &[&str]| -> Vec<String> {
+        let mut a = vec![
+            s("-y"),
+            s("-hide_banner"),
+            s("-loglevel"),
+            s("error"),
+            s("-i"),
+            path_arg(input),
+            s("-vn"),
+            s("-map"),
+            s("0:a"),
+        ];
+        a.extend(codec_args.iter().map(|x| s(*x)));
+        a.extend([s("-movflags"), s("+faststart"), path_arg(output)]);
+        a
+    };
+
+    match run(&tools.ffmpeg, &build(&["-c", "copy"]), "Saving the audio") {
+        Ok(_) => Ok(()),
+        Err(copy_err) => {
+            if SPAWN_ERR_PREFIXES.iter().any(|p| copy_err.starts_with(p)) {
+                return Err(copy_err);
+            }
+            run(&tools.ffmpeg, &build(&["-c:a", "aac", "-b:a", "160k"]), "Saving the audio")
+                .map(|_| ())
+                .map_err(|e| format!("{e}\n(Stream copy had also failed: {copy_err})"))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands: the blocking work runs on a background thread.
 
@@ -440,6 +476,15 @@ pub async fn remux_to_mp4(
     ffmpeg_path: String,
 ) -> Result<(), String> {
     blocking(move || remux_to_mp4_impl(Path::new(&input), Path::new(&output), &ffmpeg_path)).await
+}
+
+#[tauri::command]
+pub async fn remux_audio_only(
+    input: String,
+    output: String,
+    ffmpeg_path: String,
+) -> Result<(), String> {
+    blocking(move || remux_audio_only_impl(Path::new(&input), Path::new(&output), &ffmpeg_path)).await
 }
 
 // ---------------------------------------------------------------------------

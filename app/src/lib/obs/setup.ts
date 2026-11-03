@@ -183,6 +183,7 @@ export async function selectScene(name: string): Promise<void> {
 // The scene Meeting Helper sets up for itself. (Older versions made "Meeting";
 // users who picked that keep it.)
 export const MEETING_SCENE = 'Meeting Helper';
+const AUDIO_SCENE = 'Meeting Helper Audio';
 
 // With no scene chosen yet, sets up and selects the Meeting Helper scene. A
 // scene the user picked is never replaced. Never throws.
@@ -249,6 +250,27 @@ export async function createMeetingScene(opts: { auto?: boolean } = {}): Promise
   await refreshScenes();
   await configureObs({ auto: !!opts.auto, prior: made });
   return sceneName;
+}
+
+// Audio-only recording: an empty scene, so OBS captures no screen. Global audio
+// devices play in every scene; sources that live in a scene are added here too,
+// or they'd go silent. Returns the scene to go back to afterwards.
+export async function switchToAudioScene(): Promise<string | null> {
+  const sceneName = AUDIO_SCENE;
+  const { currentProgramSceneName: previous } = await obs.call('GetCurrentProgramScene');
+  await refreshScenes();
+  if (!get().scenes.includes(sceneName)) await obs.call('CreateScene', { sceneName });
+  const inputs = await listInputs();
+  const { mic, desktop } = await findAudioInputs(inputs);
+  const specials = Object.values(await getSpecialInputs());
+  const items = (await obs.call('GetSceneItemList', { sceneName })).sceneItems as { sourceName?: string }[];
+  for (const sourceName of [mic, desktop]) {
+    if (sourceName && !specials.includes(sourceName) && !items.some((i) => i.sourceName === sourceName)) {
+      await obs.call('CreateSceneItem', { sceneName, sourceName });
+    }
+  }
+  await obs.call('SetCurrentProgramScene', { sceneName });
+  return previous === sceneName ? null : previous;
 }
 
 async function pickPrimaryMonitor(inputName: string) {

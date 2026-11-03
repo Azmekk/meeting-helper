@@ -68,10 +68,10 @@ function withoutExtension(path: string): string {
 }
 
 // "C:\rec\call.mkv" → "C:\rec\call.mp4", or "call (2).mp4" if that's taken.
-async function freeMp4PathNextTo(source: string): Promise<string> {
+async function freePathNextTo(source: string, ext: string): Promise<string> {
   const base = withoutExtension(source);
-  let candidate = `${base}.mp4`;
-  for (let n = 2; await exists(candidate); n++) candidate = `${base} (${n}).mp4`;
+  let candidate = `${base}.${ext}`;
+  for (let n = 2; await exists(candidate); n++) candidate = `${base} (${n}).${ext}`;
   return candidate;
 }
 
@@ -102,7 +102,8 @@ export async function deleteMeetingFiles(meetingId: number): Promise<void> {
 export async function ingestMedia(
   path: string,
   title: string,
-  opts: { fromRecording?: boolean; meetingId?: number } = {},
+  // audioOnly: a recording of an empty scene, so only its audio tracks are kept.
+  opts: { fromRecording?: boolean; meetingId?: number; audioOnly?: boolean } = {},
 ): Promise<number> {
   const settings = getSettings();
   const existing = opts.meetingId != null ? await db.getMeeting(opts.meetingId) : null;
@@ -143,14 +144,17 @@ export async function ingestMedia(
 
   let mediaPath = path;
   let sourcePath: string | null = path;
-  if (!PLAYABLE.has(extension(path))) {
+  if (opts.audioOnly || !PLAYABLE.has(extension(path))) {
     try {
       // Recordings live in the user's recordings folder already; imported
       // files are someone else's, so we keep our copy in app data instead.
-      const output = opts.fromRecording
-        ? await freeMp4PathNextTo(path)
-        : await join(await meetingDir(id), 'media.mp4');
-      await native.remuxToMp4({ input: path, output, ffmpegPath: settings.ffmpegPath });
+      const output = opts.audioOnly
+        ? await freePathNextTo(path, 'm4a')
+        : opts.fromRecording
+          ? await freePathNextTo(path, 'mp4')
+          : await join(await meetingDir(id), 'media.mp4');
+      if (opts.audioOnly) await native.remuxAudioOnly({ input: path, output, ffmpegPath: settings.ffmpegPath });
+      else await native.remuxToMp4({ input: path, output, ffmpegPath: settings.ffmpegPath });
       mediaPath = output;
 
       if (opts.fromRecording && !settings.keepOriginalMkv) {

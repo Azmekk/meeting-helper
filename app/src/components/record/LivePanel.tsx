@@ -15,6 +15,7 @@ import {
   useLive,
   type LiveTrack,
 } from '../../lib/live';
+import { formatUsd } from '../../lib/format';
 import { useRecorder } from '../../lib/obs';
 import { useRemote } from '../../lib/remote';
 import { useSettings } from '../../lib/settings';
@@ -214,6 +215,10 @@ function NotesBox() {
   const lineCount = useLive((s) => s.lines.length);
   useLive((s) => s.overrides.live); // re-render the cost estimate on a model switch
   const mode = useSettings((s) => s.settings.liveNotesContext);
+  const interval = useSettings((s) => s.settings.liveNotesIntervalMin);
+  const cost = useLive((s) => s.aiCostUsd);
+  const prompted = useLive((s) => s.aiPromptTokens);
+  const cached = useLive((s) => s.aiCachedTokens);
 
   return (
     <div className="space-y-2.5 rounded-2xl border border-line p-3.5">
@@ -230,10 +235,39 @@ function NotesBox() {
       {notes ? (
         <PlainMarkdown text={notes} className="max-h-72 overflow-y-auto" />
       ) : (
-        <p className="text-[13px] text-faint">Updated about once a minute while people talk.</p>
+        <p className="text-[13px] text-faint">
+          {interval ? `Updated every ${interval === 1 ? 'minute' : `${interval} minutes`} while people talk.` : 'Press Update now to write notes.'}
+        </p>
       )}
       <LiveModelPicker task="live" cost={notesCostEstimate()} costUnit="per update" />
+      <NotesIntervalToggle minutes={interval} />
       <NotesContextToggle mode={mode} />
+      {prompted > 0 && (
+        <p className="text-[11px] text-faint">
+          Live AI this meeting: {formatUsd(cost)} · {Math.round((100 * cached) / prompted)}% cached
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function NotesIntervalToggle({ minutes }: { minutes: number }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="shrink-0 text-xs text-muted">Update notes</span>
+      <Segmented
+        size="sm"
+        label="Update notes"
+        value={String(minutes)}
+        onChange={(v) => void saveSettings({ liveNotesIntervalMin: Number(v) })}
+        options={[
+          { value: '1', label: '1 min' },
+          { value: '2', label: '2 min' },
+          { value: '5', label: '5 min' },
+          { value: '10', label: '10 min' },
+          { value: '0', label: 'Off' },
+        ]}
+      />
     </div>
   );
 }
@@ -256,8 +290,8 @@ export function NotesContextToggle({ mode }: { mode: 'notes' | 'full' }) {
       </div>
       <p className="text-[11px] leading-snug text-faint">
         {mode === 'notes'
-          ? 'Cheapest: each update sees the notes plus the last ~90 s. Earlier details live only in the notes.'
-          : 'Better recall of earlier parts; cost grows with meeting length (with caching on Sonnet 5.5 about $0.60 for 1 h vs $0.45, $1.50 for 2 h vs $0.90; much more without caching).'}{' '}
+          ? 'Cheapest: each update sees the notes plus what was said since the last one (at least 90 s). Earlier details live only in the notes.'
+          : 'Best recall: each update can go back to anything said, read from cache at a low price. Costs a little more as the meeting grows.'}{' '}
         Applies from the next update.
       </p>
     </div>

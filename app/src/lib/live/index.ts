@@ -11,6 +11,7 @@
 //   live://hello      {}                                  → re-broadcast state
 //   live://help       {}                                  → help me answer
 //   live://ask        { question: string }                → typed question
+//   live://refresh-notes {}                               → update the notes now
 //   live://set-model  { task: 'live'|'answer', model: string, makeDefault?: boolean }
 // And one the other way: overlay://close {} asks the overlay to fade out and
 // close itself (toggleOverlay force-closes it after 400 ms if it doesn't).
@@ -24,9 +25,9 @@
 import { listen } from '@tauri-apps/api/event';
 import { setMicMuted, setRecordingStopHook, useRecorder } from '../obs';
 import { useSettings } from '../settings';
-import { helpMeAnswer, loadModelOptions, setLiveModel } from './ai';
+import { helpMeAnswer, loadModelOptions, refreshNotes, setLiveModel } from './ai';
 import { broadcastNow, scheduleBroadcast } from './broadcast';
-import { maybeAutoStart, onRecordingStopped, registerHotkey } from './session';
+import { maybeAutoStart, onRecordingStopped, registerHotkey, restartNotesTimer } from './session';
 import { useLive, type LiveAiTask } from './store';
 
 export {
@@ -70,6 +71,7 @@ export function initLive(): void {
   useSettings.subscribe((s, prev) => {
     if (s.settings.liveEnabled !== prev.settings.liveEnabled) maybeAutoStart();
     if (s.settings.liveHotkey !== prev.settings.liveHotkey && get().active) void registerHotkey();
+    if (s.settings.liveNotesIntervalMin !== prev.settings.liveNotesIntervalMin) restartNotesTimer();
     if (s.settings.aiProvider !== prev.settings.aiProvider) {
       set({ overrides: {}, modelOptions: [] });
       void loadModelOptions();
@@ -89,6 +91,7 @@ export function initLive(): void {
   });
   void listen('live://help', () => void helpMeAnswer());
   void listen<{ question?: string }>('live://ask', (e) => void helpMeAnswer(e.payload?.question ?? ''));
+  void listen('live://refresh-notes', () => void refreshNotes());
   void listen<{ muted?: boolean }>('live://set-mute', (e) => {
     void setMicMuted(!!e.payload?.muted).catch((err) => console.warn('Could not change the mic mute', err));
   });

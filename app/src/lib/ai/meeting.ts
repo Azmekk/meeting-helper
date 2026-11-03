@@ -6,7 +6,8 @@ import { formatDate } from '../format';
 import { getSecret } from '../secrets';
 import { getSettings } from '../settings';
 import type { AiDoc, ChatMessage, Folder, Meeting, TranscriptDetail } from '../types';
-import { estimateCost, getAiProvider, roughTokens, runAi, type AiMessage, type AiResult } from './index';
+import { cacheWindowMs, effectiveModel, estimateCallCost, estimateCost, getAiProvider, roughTokens, runAi, usageNote, type AiMessage, type AiResult } from './index';
+import { TASK_RULES, parseProposal, taskListText, visibleAnswer } from './tasks';
 import { CITATION_RULES, formatTranscript, languageInstruction, normalizeCitations, toPromptLines } from './prompts';
 
 export interface MeetingAiOptions {
@@ -84,6 +85,21 @@ function costOf(result: AiResult): number | null {
   return estimateCost(result.model, result.usage);
 }
 
+// When each model last read this meeting's transcript, for the "cache expired" hint.
+const cacheUse = new Map<string, number>();
+const noteCacheUse = (meetingId: number, model: string) => cacheUse.set(`${model}|${meetingId}`, Date.now());
+
+// What the next question will cost when the cached transcript has expired (or
+// was never made by this model); null while it's probably still there.
+export async function coldQuestionCost(meetingId: number, conversationId: number | null, model = effectiveModel('summary')): Promise<number | null> {
+  const used = cacheUse.get(`${model}|${meetingId}`);
+  if (used != null && Date.now() - used < cacheWindowMs(model)) return null;
+  const ctx = await loadMeetingContext(meetingId);
+  const history = conversationId != null ? await db.listChatMessages('meeting', meetingId, conversationId) : [];
+  const tokens = roughTokens(contextBlock(ctx)) + roughTokens(history.map((m) => m.content).join('\n'));
+  return estimateCallCost(model, tokens, 300, false);
+}
+
 export function truncationNote(result: AiResult): string {
   return result.stopReason === 'max_tokens' ? '\n\n_(The answer was cut off because it reached the length limit.)_' : '';
 }
@@ -112,7 +128,7 @@ export async function summarizeMeeting(meetingId: number, opts: MeetingAiOptions
     'summary',
     {
       system: systemPrompt(SUMMARY_ROLE, ctx),
-      context: contextBlock(ctx),
+      context: [contextBlock(ctx)],
       messages: [{ role: 'user', content: 'Summarise this meeting.' }],
       maxTokens: 16000,
       model: opts.model || undefined,
@@ -120,6 +136,7 @@ export async function summarizeMeeting(meetingId: number, opts: MeetingAiOptions
     },
     { onText: (_delta, text) => opts.onText?.(text) },
   );
+  noteCacheUse(meetingId, result.model);
   const content = normalizeCitations(result.text.trim(), knownSegment(ctx));
   if (!content) throw new Error(result.stopReason === 'refusal' ? 'The model declined to summarise this meeting.' : 'The model returned an empty summary.');
   const doc = await db.saveAiDoc({
@@ -211,34 +228,46 @@ export interface ChatExchange {
   answer: ChatMessage;
   costUsd: number | null;
   model: string;
+  conversationId: number;
+  note: string; // how much came from cache, for the line under the answer
 }
 
-// Asks a question about the meeting with the stored chat as history. Both
-// turns are saved only once the answer is complete, so a failed or stopped
-// request leaves the chat as it was.
-export async function askMeeting(meetingId: number, question: string, opts: MeetingAiOptions = {}): Promise<ChatExchange> {
+// Asks a question about the meeting with the conversation so far as history. A
+// null conversation starts a new one. Both turns are saved only once the answer
+// is complete, so a failed or stopped request leaves the chat as it was.
+export async function askMeeting(
+  meetingId: number,
+  question: string,
+  opts: MeetingAiOptions & { conversationId?: number | null } = {},
+): Promise<ChatExchange> {
   const q = question.trim();
   if (!q) throw new Error('Type a question first.');
   const ctx = await loadMeetingContext(meetingId);
-  const history = await db.listChatMessages('meeting', meetingId);
+  const history = opts.conversationId != null ? await db.listChatMessages('meeting', meetingId, opts.conversationId) : [];
+  const tasks = ctx.folder ? await db.listActionItems(ctx.folder.id) : null;
   const result = await runAi(
     'summary',
     {
-      system: systemPrompt(CHAT_ROLE, ctx),
-      context: contextBlock(ctx),
+      system: [systemPrompt(CHAT_ROLE, ctx), tasks ? TASK_RULES : ''].filter(Boolean).join('\n\n'),
+      context: [contextBlock(ctx)],
       messages: toAiMessages(history, q),
+      conversation: true,
+      turnContext: tasks ? taskListText(tasks) : undefined,
       maxTokens: 8000,
       effort: 'normal',
       model: opts.model || undefined,
       signal: opts.signal,
     },
-    { onText: (_delta, text) => opts.onText?.(text) },
+    { onText: (_delta, text) => opts.onText?.(visibleAnswer(text)) },
   );
-  const text = normalizeCitations(result.text.trim(), knownSegment(ctx));
-  if (!text) throw new Error(result.stopReason === 'refusal' ? 'The model declined to answer.' : 'The model returned an empty answer.');
-  const saved = await db.addChatMessage('meeting', meetingId, 'user', q);
-  const answer = await db.addChatMessage('meeting', meetingId, 'assistant', text + truncationNote(result));
-  return { question: saved, answer, costUsd: costOf(result), model: result.model };
+  noteCacheUse(meetingId, result.model);
+  const proposal = tasks ? parseProposal(result.text, tasks) : null;
+  const text = normalizeCitations(visibleAnswer(result.text).trim(), knownSegment(ctx));
+  if (!text && !proposal) throw new Error(result.stopReason === 'refusal' ? 'The model declined to answer.' : 'The model returned an empty answer.');
+  const conversationId = opts.conversationId ?? (await db.createConversation('meeting', meetingId, q));
+  const saved = await db.addChatMessage('meeting', meetingId, conversationId, 'user', q);
+  const answer = await db.addChatMessage('meeting', meetingId, conversationId, 'assistant', (text || 'Proposed task changes:') + truncationNote(result), proposal);
+  return { question: saved, answer, costUsd: costOf(result), model: result.model, conversationId, note: usageNote(result.usage) };
 }
 
 // True for errors caused by the user stopping a request.

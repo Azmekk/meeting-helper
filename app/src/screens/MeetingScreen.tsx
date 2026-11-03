@@ -1,9 +1,10 @@
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { ChevronDown, ChevronUp, Crosshair, FileText, ListFilter, MessageSquare, RotateCcw, Search, Sparkles, Trash2, X, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ChevronUp, Crosshair, FileText, ListChecks, ListFilter, MessageSquare, NotebookPen, RotateCcw, Search, Sparkles, Tags, Trash2, Users, X, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ProgressPanel } from '../components/folders/ProgressPanel';
 import { DeleteMeetingModal } from '../components/meeting/actions';
 import { BriefingCard, ChatPanel, CitedLine, SummaryPanel } from '../components/meeting/AiPanels';
 import { TermsCard } from '../components/meeting/TermsCard';
@@ -36,7 +37,7 @@ import { highlightTerms, matchesQuery, parseQuery } from '../lib/search';
 import { onMeetingChanged, transcribeMeeting, useJobs, type Job, type JobStage } from '../lib/pipeline';
 import { moveMeetingToFolder, refreshFolders, useFolders } from '../lib/folders';
 import { useSettings } from '../lib/settings';
-import { speakerName, type Meeting, type ProviderId, type Segment, type Transcript, type TranscriptDetail } from '../lib/types';
+import { speakerName, type ActionItem, type Meeting, type ProviderId, type Segment, type Transcript, type TranscriptDetail } from '../lib/types';
 
 // Last segment that started at or before `ms`, if we're still inside it (with
 // a little slack for gaps between segments).
@@ -63,6 +64,31 @@ const RIGHT_TABS: { id: RightTab; label: string; icon: LucideIcon }[] = [
   { id: 'summary', label: 'Summary', icon: Sparkles },
   { id: 'chat', label: 'Chat', icon: MessageSquare },
 ];
+
+type SideTab = 'progress' | 'speakers' | 'briefing' | 'terms';
+
+const SIDE_TABS: { id: SideTab; label: string; icon: LucideIcon }[] = [
+  { id: 'progress', label: 'Progress', icon: ListChecks },
+  { id: 'speakers', label: 'Speakers', icon: Users },
+  { id: 'briefing', label: 'Briefing', icon: NotebookPen },
+  { id: 'terms', label: 'Terms', icon: Tags },
+];
+
+// Remembered across meetings; a page still works if storage is unavailable.
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* only a convenience */
+  }
+}
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -96,12 +122,27 @@ export default function MeetingScreen() {
   const [deleteMeetingOpen, setDeleteMeetingOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [tab, setTab] = useState<RightTab>('transcript');
+  const [sideTab, setSideTabState] = useState<SideTab>(() => (SIDE_TABS.find((t) => t.id === readPref('meeting-side-tab'))?.id ?? 'progress'));
+  const [videoExpanded, setVideoExpanded] = useState(() => readPref('meeting-video-expanded') === '1');
+  const [folderMeetings, setFolderMeetings] = useState<Meeting[]>([]);
+  const [askDraft, setAskDraft] = useState<{ text: string; nonce: number } | null>(null);
   const [citedId, setCitedId] = useState<number | null>(null);
 
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   const pendingSeek = useRef<{ ms: number; play: boolean } | null>(null);
   const detailRef = useRef(detail);
   detailRef.current = detail;
+
+  const setSideTab = (next: SideTab) => {
+    setSideTabState(next);
+    writePref('meeting-side-tab', next);
+  };
+  const toggleVideo = () => {
+    setVideoExpanded((v) => {
+      writePref('meeting-video-expanded', v ? '0' : '1');
+      return !v;
+    });
+  };
 
   // ---------- Loading ----------
 
@@ -470,11 +511,40 @@ export default function MeetingScreen() {
     refreshFolders().catch(() => {});
   }, []);
 
-  const moveToFolder = async (folderId: number | null) => {
+  const folderId = meeting?.folderId ?? null;
+  useEffect(() => {
+    if (folderId == null) {
+      setFolderMeetings([]);
+      return;
+    }
+    let alive = true;
+    db.listFolderMeetings(folderId)
+      .then((list) => alive && setFolderMeetings(list))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [folderId, meetingId]);
+
+  // "Ask about this" on a task: opens the chat with the question started.
+  const askAboutTask = useCallback((item: ActionItem) => {
+    setTab('chat');
+    setAskDraft({ text: `About the task "${item.text}" (id ${item.id}): `, nonce: Date.now() });
+  }, []);
+
+  const seekFromTask = useCallback(
+    (ms: number) => {
+      setFollow(false);
+      seek(ms, true);
+    },
+    [seek],
+  );
+
+  const moveToFolder = async (target: number | null) => {
     try {
-      await moveMeetingToFolder(meetingId, folderId);
+      await moveMeetingToFolder(meetingId, target);
       await loadAll();
-      const name = folderId == null ? 'Unsorted' : folders.find((f) => f.id === folderId)?.name;
+      const name = target == null ? 'Unsorted' : folders.find((f) => f.id === target)?.name;
       toast(`Moved to ${name ?? 'folder'}`, 'success');
     } catch (err) {
       toast(`Couldn't move the meeting: ${errorMessage(err)}`, 'error');
@@ -606,44 +676,32 @@ export default function MeetingScreen() {
         </Callout>
       )}
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]">
-        {/* Left: player + speakers */}
-        <aside className="space-y-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto lg:pb-2">
-          {meeting.mediaPath ? (
-            <MediaPlayer
-              path={meeting.mediaPath}
-              mediaRef={mediaRef}
-              durationMs={meeting.durationMs}
-              onReady={onMediaReady}
-              onTimeUpdate={onTimeUpdate}
-            />
-          ) : (
-            <Callout tone="warn" title="No playable media">
-              {meeting.status === 'recording'
-                ? 'The recording is still in progress.'
-                : meeting.sourcePath
-                  ? 'The recording hasn’t been converted to a playable file yet.'
-                  : 'The media file for this meeting is missing. The transcript is still available.'}
-            </Callout>
-          )}
-          {!meeting.mediaPath && <CloudMediaBanner meeting={meeting} />}
+      <div className="mb-4 space-y-4">
+        {meeting.mediaPath ? (
+          <MediaPlayer
+            path={meeting.mediaPath}
+            mediaRef={mediaRef}
+            durationMs={meeting.durationMs}
+            expanded={videoExpanded}
+            onToggleExpanded={toggleVideo}
+            onReady={onMediaReady}
+            onTimeUpdate={onTimeUpdate}
+          />
+        ) : (
+          <Callout tone="warn" title="No playable media">
+            {meeting.status === 'recording'
+              ? 'The recording is still in progress.'
+              : meeting.sourcePath
+                ? 'The recording hasn’t been converted to a playable file yet.'
+                : 'The media file for this meeting is missing. The transcript is still available.'}
+          </Callout>
+        )}
+        {!meeting.mediaPath && <CloudMediaBanner meeting={meeting} />}
+      </div>
 
-          {detail && (
-            <SpeakersPanel
-              speakers={detail.speakers}
-              segments={detail.segments}
-              colorOf={colorOf}
-              knownNames={knownNames}
-              onRename={renameSpeaker}
-              onAdd={addSpeaker}
-            />
-          )}
-
-          <BriefingCard meeting={meeting} onSaved={(briefing) => setMeeting((m) => (m ? { ...m, briefing } : m))} />
-          <TermsCard meeting={meeting} onSaved={(terms) => setMeeting((m) => (m ? { ...m, terms } : m))} />
-        </aside>
-
-        {/* Right: status + transcript */}
+      {/* Each menu sits directly above its own panel, so both rows line up. */}
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
+        {/* Main: status + transcript, summary, chat */}
         <section className="min-w-0">
           {busy && <ProcessingPanel job={job} />}
 
@@ -703,7 +761,7 @@ export default function MeetingScreen() {
               value={tab}
               onChange={setTab}
               options={RIGHT_TABS.map((t) => ({ value: t.id, label: t.label, icon: t.icon }))}
-              className="mb-4"
+              className="mb-4 flex w-full [&>button]:flex-1"
             />
           )}
 
@@ -717,7 +775,7 @@ export default function MeetingScreen() {
                 <SummaryPanel meetingId={meetingId} hasText={segmentCount > 0} cite={cite} />
               </div>
               <div className={clsx(tab !== 'chat' && 'hidden')}>
-                <ChatPanel meetingId={meetingId} hasText={segmentCount > 0} cite={cite} />
+                <ChatPanel meetingId={meetingId} folderId={folderId} hasText={segmentCount > 0} cite={cite} draft={askDraft} />
               </div>
             </div>
           )}
@@ -825,6 +883,53 @@ export default function MeetingScreen() {
             </div>
           )}
         </section>
+
+        {/* Side: progress, speakers, briefing, terms */}
+        <aside className="min-w-0 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto xl:pb-2">
+          <Segmented
+            role="tablist"
+            label="Meeting details"
+            value={sideTab}
+            onChange={setSideTab}
+            options={SIDE_TABS.map((t) => ({ value: t.id, label: t.label, icon: t.icon }))}
+            className="mb-4 flex w-full [&>button]:flex-1 [&>button]:px-2"
+          />
+          {sideTab === 'progress' &&
+            (meeting.folderId != null && folders.some((f) => f.id === meeting.folderId) ? (
+              <ProgressPanel
+                folder={folders.find((f) => f.id === meeting.folderId)!}
+                meetings={folderMeetings}
+                meetingId={meetingId}
+                onSeek={seekFromTask}
+                onAsk={askAboutTask}
+              />
+            ) : (
+              <Card>
+                <EmptyState
+                  icon={ListChecks}
+                  title="Tasks live in folders"
+                  description="Move this meeting into a folder from the menu at the top of the page to track its tasks."
+                />
+              </Card>
+            ))}
+          {sideTab === 'speakers' &&
+            (detail ? (
+              <SpeakersPanel
+                speakers={detail.speakers}
+                segments={detail.segments}
+                colorOf={colorOf}
+                knownNames={knownNames}
+                onRename={renameSpeaker}
+                onAdd={addSpeaker}
+              />
+            ) : (
+              <Card>
+                <EmptyState icon={Users} title="No speakers yet" description="They appear once the meeting has a transcript." />
+              </Card>
+            ))}
+          {sideTab === 'briefing' && <BriefingCard meeting={meeting} onSaved={(briefing) => setMeeting((m) => (m ? { ...m, briefing } : m))} />}
+          {sideTab === 'terms' && <TermsCard meeting={meeting} onSaved={(terms) => setMeeting((m) => (m ? { ...m, terms } : m))} />}
+        </aside>
       </div>
 
       <Modal

@@ -27,13 +27,13 @@ const get = useLive.getState;
 // Soniox real-time list price per audio hour (per track), for the cost shown on the transcript.
 const LIVE_USD_PER_HOUR = 0.12;
 const SAVE_EVERY_MS = 4000;
-const NOTES_EVERY_MS = 60_000;
 
 let streamedMs = 0; // audio streamed per track, summed over start/stop within the meeting
 let streamStartedAt: number | null = null;
 let trackCount = 0;
 let saveTimer: ReturnType<typeof setInterval> | null = null;
 let notesTimer: ReturnType<typeof setInterval> | null = null;
+let aiReady = false;
 let stopping: Promise<void> | null = null;
 let attemptedFor: number | null = null;
 let registeredHotkey: string | null = null;
@@ -109,13 +109,23 @@ async function doStartLive(): Promise<void> {
     streamStartedAt = Date.now();
     set({ active: true, starting: false });
     saveTimer = setInterval(() => void persist(), SAVE_EVERY_MS);
-    // Without an AI key the transcript still works; notes would only fail every minute.
-    const aiReady = await hasAiKey().catch(() => false);
-    if (aiReady && get().active && !stopping) notesTimer = setInterval(() => void refreshNotes(), NOTES_EVERY_MS);
+    // Without an AI key the transcript still works; notes would only keep failing.
+    aiReady = await hasAiKey().catch(() => false);
+    restartNotesTimer();
     void registerHotkey();
     void loadModelOptions();
   } catch (err) {
     set({ starting: false, error: errorMessage(err), tracks: {} });
+  }
+}
+
+// Also called when the interval setting changes, so it applies mid-meeting.
+export function restartNotesTimer() {
+  if (notesTimer) clearInterval(notesTimer);
+  notesTimer = null;
+  const minutes = getSettings().liveNotesIntervalMin;
+  if (aiReady && minutes > 0 && get().active && !stopping) {
+    notesTimer = setInterval(() => void refreshNotes(), minutes * 60_000);
   }
 }
 

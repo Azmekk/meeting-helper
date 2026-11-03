@@ -1,4 +1,4 @@
-import { CloudUpload, EyeOff, Folder, Languages, Mic, Palette, Sparkles, Star, Wrench, type LucideIcon } from 'lucide-react';
+import { CloudUpload, EyeOff, Folder, Languages, Mic, Palette, Plug, Sparkles, Star, Wrench, type LucideIcon } from 'lucide-react';
 import { useEffect, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader, clsx } from '../components/ui';
@@ -11,6 +11,7 @@ import { FoldersSection } from '../components/settings/FoldersSection';
 import { LanguageSection } from '../components/settings/LanguageSection';
 import { ProviderCard } from '../components/settings/ProviderCard';
 import { LiveSection } from '../components/settings/LiveSection';
+import { McpSection } from '../components/settings/McpSection';
 import { RecordingSection } from '../components/settings/RecordingSection';
 import { SecretSection } from '../components/settings/SecretSection';
 import { UpdatesSection } from '../components/settings/UpdatesSection';
@@ -18,7 +19,7 @@ import { SavedIndicator, loadKeyStatus, useKeyStatus } from '../components/setti
 import { useSettings } from '../lib/settings';
 import type { ProviderId } from '../lib/types';
 
-type TabId = ProviderId | 'appearance' | 'ai' | 'language' | 'recording' | 'folders' | 'backup' | 'secret' | 'system';
+type TabId = ProviderId | 'appearance' | 'ai' | 'mcp' | 'language' | 'recording' | 'folders' | 'backup' | 'secret' | 'system';
 
 const PROVIDER_TABS: { id: ProviderId; label: string }[] = [
   { id: 'soniox', label: 'Soniox' },
@@ -28,6 +29,7 @@ const PROVIDER_TABS: { id: ProviderId; label: string }[] = [
 const GENERAL_TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'ai', label: 'AI', icon: Sparkles },
+  { id: 'mcp', label: 'MCP', icon: Plug },
   { id: 'language', label: 'Language', icon: Languages },
   { id: 'recording', label: 'Recording', icon: Mic },
   { id: 'folders', label: 'Folders', icon: Folder },
@@ -96,6 +98,7 @@ export default function SettingsScreen() {
           )}
           {tab === 'appearance' && <AppearanceSection />}
           {tab === 'ai' && <AiSection />}
+          {tab === 'mcp' && <McpSection />}
           {tab === 'language' && <LanguageSection />}
           {tab === 'folders' && <FoldersSection />}
           {tab === 'backup' && <BackupSection />}

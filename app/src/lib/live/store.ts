@@ -69,6 +69,8 @@ export interface LiveSnapshot {
   notesContext: 'notes' | 'full';
   notesCostEstimate: number | null; // USD per notes update
   aiCostUsd: number; // spent on live AI so far this meeting
+  aiCachedPercent: number | null; // of this meeting's prompts; null before the first call
+  notesIntervalMin: number; // Settings.liveNotesIntervalMin; 0 = manual only
   hotkey: string;
 }
 
@@ -87,6 +89,8 @@ interface LiveState {
   overrides: Partial<Record<LiveAiTask, string>>; // per-meeting model choices
   modelOptions: string[];
   aiCostUsd: number;
+  aiPromptTokens: number;
+  aiCachedTokens: number;
   hotkeyError: string | null;
   overlayOpen: boolean;
 }
@@ -106,6 +110,8 @@ export const INITIAL: LiveState = {
   overrides: {},
   modelOptions: [],
   aiCostUsd: 0,
+  aiPromptTokens: 0,
+  aiCachedTokens: 0,
   hotkeyError: null,
   overlayOpen: false,
 };

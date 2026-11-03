@@ -4,11 +4,12 @@ import type { SecretName } from '../secrets';
 
 export type AiProviderId = 'anthropic' | 'openai' | 'deepseek' | 'custom';
 
-// Which setting picks the model: live notes, "help me answer", summaries/chat.
-export type AiTask = 'live' | 'answer' | 'summary';
+// Which setting picks the model: live notes, "help me answer", summaries/chat,
+// and background folder work (action items, folder summary, extraction).
+export type AiTask = 'live' | 'answer' | 'summary' | 'background';
 
-// 'fast' = live calls (lowest reasoning effort), 'normal' = chat/answers,
-// 'deep' = summaries, extraction, folder work.
+// 'fast' = live notes (lowest reasoning effort), 'normal' = everything that
+// reads a saved meeting, so those calls can share one transcript cache.
 export type AiEffort = 'fast' | 'normal' | 'deep';
 
 export interface AiAuth {
@@ -37,11 +38,21 @@ export interface AiToolCall {
 export interface AiRequest {
   model: string;
   system: string;
-  // Large, stable block (transcript, folder material). Sent right after the
-  // system prompt so providers can cache it across calls; keep it byte-identical
-  // between calls (append-only for a live transcript).
-  context?: string;
+  // Large, stable blocks (transcript, folder material), sent before the system
+  // prompt so different tasks over the same material share one cache. Each block
+  // must stay byte-identical between calls; a growing transcript adds new blocks
+  // rather than extending the last one, because providers only reuse a prefix up
+  // to a block boundary.
+  context?: string[];
+  // Comes after `context` and isn't cached: the part of a transcript still growing.
+  contextTail?: string;
   messages: AiMessage[]; // must start with a user message
+  // True for chat: the history is also cached so the next question can reuse it.
+  conversation?: boolean;
+  // Current state for this turn only (the open task list). Goes after the newest
+  // question and isn't saved in the history, so it can change without breaking
+  // the cached history.
+  turnContext?: string;
   maxTokens?: number;
   effort?: AiEffort;
   tools?: AiTool[];

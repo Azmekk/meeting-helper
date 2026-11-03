@@ -2,15 +2,16 @@
 // Requests stay alive while switching tabs (panels stay mounted) and are
 // aborted when the meeting screen unmounts.
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
-import { AiModelSelect, useAiModel } from '../ai/AiModelSelect';
+import { AiModelSelect, rememberAiModel, useAiModel } from '../ai/AiModelSelect';
+import { ConversationBar, ProposalCard, useConversations } from '../ai/ChatParts';
 import { SummaryHistoryControls, useSummaryHistory } from '../ai/SummaryHistory';
-import { ArrowUp, KeyRound, MessageSquare, Play, RefreshCw, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { ArrowUp, KeyRound, MessageSquare, Play, RefreshCw, Sparkles, Square, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Button, Callout, Card, EmptyState, IconButton, Modal, Spinner, Textarea, errorMessage, toast } from '../ui';
+import { Button, Callout, Card, EmptyState, IconButton, Spinner, Textarea, errorMessage, toast } from '../ui';
 import * as db from '../../lib/db';
 import { formatDate, formatTimestamp, formatUsd } from '../../lib/format';
-import { askMeeting, hasAiKey, isAbortError, onMeetingSummarized, startSummary, stopSummary, useSummaryJobs } from '../../lib/ai/meeting';
+import { askMeeting, coldQuestionCost, hasAiKey, isAbortError, onMeetingSummarized, startSummary, stopSummary, useSummaryJobs } from '../../lib/ai/meeting';
 import { useSettings } from '../../lib/settings';
 import type { ChatMessage, Meeting } from '../../lib/types';
 import { AiMarkdown, type CiteProps, type CiteTarget } from './AiMarkdown';
@@ -174,34 +175,62 @@ export function SummaryPanel({ meetingId, hasText, cite }: { meetingId: number; 
 
 const SUGGESTIONS = ['What did I commit to?', 'What were the main disagreements?', 'Write a short follow-up email.'];
 
-export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; hasText: boolean; cite: CiteProps }) {
+export function ChatPanel({
+  meetingId,
+  folderId,
+  hasText,
+  cite,
+  draft,
+}: {
+  meetingId: number;
+  folderId: number | null;
+  hasText: boolean;
+  cite: CiteProps;
+  draft?: { text: string; nonce: number } | null; // "Ask about this" on a task
+}) {
   const hasKey = useAiKey();
-  const [model, setModel] = useAiModel();
-  const [messages, setMessages] = useState<ChatMessage[] | undefined>(undefined);
+  const chat = useConversations('meeting', meetingId);
+  const { messages } = chat;
+  const memory = `chat:meeting:${chat.activeId ?? meetingId}`;
+  const [model, setModel] = useAiModel('summary', memory);
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<{ question: string; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [costs, setCosts] = useState<Record<number, string>>({});
-  const [confirmClear, setConfirmClear] = useState(false);
+  const [coldCost, setColdCost] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
   const { start, stop } = useAbortable();
 
   useEffect(() => {
-    setMessages(undefined);
-    db.listChatMessages('meeting', meetingId)
-      .then(setMessages)
-      .catch((err) => {
-        setMessages([]);
-        setError(errorMessage(err));
-      });
-  }, [meetingId]);
+    if (!draft) return;
+    setInput(draft.text);
+    inputRef.current?.focus();
+  }, [draft]);
 
   // Keep the newest text in view unless the user scrolled up to read.
   useLayoutEffect(() => {
     const el = listRef.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [messages, pending]);
+
+  // Warns before a question that has to pay for the whole transcript again.
+  // Rechecked regularly: the cache expires while the chat sits idle.
+  useEffect(() => {
+    if (!hasText || !hasKey) return;
+    let alive = true;
+    const check = () =>
+      coldQuestionCost(meetingId, chat.activeId, model)
+        .then((usd) => alive && setColdCost(usd))
+        .catch(() => alive && setColdCost(null));
+    void check();
+    const timer = setInterval(() => void check(), 30_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [meetingId, chat.activeId, model, hasText, hasKey, pending]);
 
   const send = async (text = input) => {
     const question = text.trim();
@@ -215,27 +244,18 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
       const ex = await askMeeting(meetingId, question, {
         signal,
         model,
+        conversationId: chat.activeId,
         onText: (t) => setPending((p) => (p ? { ...p, text: t } : p)),
       });
-      setMessages((m) => [...(m ?? []), ex.question, ex.answer]);
-      setCosts((c) => ({ ...c, [ex.answer.id]: `${ex.model} · ${formatUsd(ex.costUsd)}` }));
+      rememberAiModel(`chat:meeting:${ex.conversationId}`, model);
+      await chat.add(ex);
+      setCosts((c) => ({ ...c, [ex.answer.id]: [ex.model, formatUsd(ex.costUsd), ex.note].filter(Boolean).join(' · ') }));
     } catch (err) {
       // Nothing was saved; give the question back so it can be retried.
       setInput((cur) => cur || question);
       if (!isAbortError(err)) setError(errorMessage(err));
     } finally {
       setPending(null);
-    }
-  };
-
-  const clear = async () => {
-    try {
-      await db.clearChat('meeting', meetingId);
-      setMessages([]);
-      setCosts({});
-      setConfirmClear(false);
-    } catch (err) {
-      toast(`Couldn't clear the chat: ${errorMessage(err)}`, 'error');
     }
   };
 
@@ -250,6 +270,7 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
   if (!hasText && !messages.length) return <NoTranscriptNotice />;
 
   const canSend = hasKey && hasText && !pending;
+  const shownError = error ?? chat.loadError;
 
   return (
     <Card
@@ -260,14 +281,10 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
         <>
           <AiLanguageSelect />
           <AiModelSelect value={model} onChange={setModel} disabled={!!pending} />
-          {messages.length > 0 && (
-            <Button size="sm" variant="ghost" icon={Trash2} disabled={!!pending} onClick={() => setConfirmClear(true)}>
-              Clear chat
-            </Button>
-          )}
         </>
       }
     >
+      <ConversationBar conversations={chat.conversations} activeId={chat.activeId} disabled={!!pending} onOpen={(id) => void chat.open(id)} onDelete={chat.remove} />
       <div
         ref={listRef}
         onScroll={(e) => {
@@ -289,7 +306,10 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
           </div>
         )}
         {messages.map((m) => (
-          <ChatBubble key={m.id} role={m.role} text={m.content} meta={costs[m.id]} cite={cite} />
+          <div key={m.id}>
+            <ChatBubble role={m.role} text={m.content} meta={costs[m.id]} cite={cite} />
+            {m.proposal && folderId != null && <ProposalCard message={m} folderId={folderId} meetingId={meetingId} onChange={chat.setProposal} />}
+          </div>
         ))}
         {pending && (
           <>
@@ -306,10 +326,15 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
       </div>
 
       <div className="border-t border-line px-5 py-3.5">
-        {error && (
+        {shownError && (
           <Callout tone="error" className="mb-3">
-            <p className="break-words">{error}</p>
+            <p className="break-words">{shownError}</p>
           </Callout>
+        )}
+        {coldCost != null && coldCost >= 0.01 && !pending && (
+          <p className="mb-2 text-xs text-muted">
+            The cached transcript has expired or isn't made yet, so the next question costs about {formatUsd(coldCost)}. Questions after it are much cheaper.
+          </p>
         )}
         {!hasKey && (
           <p className="mb-2 text-[13px] text-muted">
@@ -322,6 +347,7 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
         )}
         <div className="flex items-end gap-2">
           <Textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -347,23 +373,6 @@ export function ChatPanel({ meetingId, hasText, cite }: { meetingId: number; has
         </div>
       </div>
 
-      <Modal
-        open={confirmClear}
-        onClose={() => setConfirmClear(false)}
-        title="Clear chat?"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setConfirmClear(false)}>
-              Cancel
-            </Button>
-            <Button variant="danger" icon={Trash2} onClick={clear}>
-              Clear
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-muted">This deletes all questions and answers for this meeting.</p>
-      </Modal>
     </Card>
   );
 }

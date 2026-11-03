@@ -2,7 +2,7 @@
 // output language.
 import { Eye, EyeOff, FlaskConical, KeyRound, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { AI_PROVIDER_IDS, getAiProvider, pickerModels, sortModels, type AiProvider, type AiProviderId } from '../../lib/ai';
+import { AI_PROVIDER_IDS, getAiProvider, pickerModels, recommendedModel, sortModels, type AiProvider, type AiProviderId, type AiTask } from '../../lib/ai';
 import { estimateCost } from '../../lib/ai/pricing';
 import { languageName } from '../../lib/ai/prompts';
 import { OUTPUT_LANGUAGES } from '../ai/AiLanguageSelect';
@@ -331,10 +331,11 @@ function KeyField({
   );
 }
 
-const TASKS: { key: keyof Pick<Settings, 'aiLiveModel' | 'aiAnswerModel' | 'aiSummaryModel'>; label: string; hint: string }[] = [
-  { key: 'aiLiveModel', label: 'Live notes', hint: 'Runs about once a minute during a meeting. A fast model keeps cost down.' },
-  { key: 'aiAnswerModel', label: 'Help me answer', hint: 'Reads the whole meeting so far when you ask for help.' },
-  { key: 'aiSummaryModel', label: 'Summaries and chat', hint: 'Meeting summaries, chat and folder work after the meeting.' },
+const TASKS: { task: AiTask; key: keyof Pick<Settings, 'aiLiveModel' | 'aiAnswerModel' | 'aiSummaryModel' | 'aiBackgroundModel'>; label: string; hint: string }[] = [
+  { task: 'live', key: 'aiLiveModel', label: 'Live notes', hint: 'Runs on its interval during a meeting. Uses the cheapest model unless you choose one.' },
+  { task: 'answer', key: 'aiAnswerModel', label: 'Help me answer', hint: 'Reads the whole meeting so far when you ask for help.' },
+  { task: 'summary', key: 'aiSummaryModel', label: 'Summaries and chat', hint: 'Meeting summaries and chat after the meeting.' },
+  { task: 'background', key: 'aiBackgroundModel', label: 'Background work', hint: 'Action items, folder summaries and extraction. Uses the cheapest model unless you choose one.' },
 ];
 
 // Rough cost of a typical hour-long meeting summary, to make model prices comparable.
@@ -345,7 +346,7 @@ function priceHint(model: string): string {
 
 function ModelPickers({ provider, models, canList }: { provider: AiProvider; models: ModelsState; canList: boolean }) {
   const settings = useSettings((s) => s.settings);
-  const { default: recommended, budget } = provider.recommendedModels;
+  const { default: defaultModel, budget } = provider.recommendedModels;
 
   if (!canList) {
     return (
@@ -379,6 +380,7 @@ function ModelPickers({ provider, models, canList }: { provider: AiProvider; mod
 
       {TASKS.map((t) => {
         const value = settings[t.key];
+        const recommended = recommendedModel(t.task, provider);
         const effective = value || recommended;
         return (
           <Field
@@ -408,7 +410,7 @@ function ModelPickers({ provider, models, canList }: { provider: AiProvider; mod
                     {top.map((m) => (
                       <option key={m} value={m}>
                         {m}
-                        {m === recommended ? ' (default)' : m === budget ? ' (budget)' : ''}
+                        {m === defaultModel ? ' (default)' : m === budget ? ' (budget)' : ''}
                       </option>
                     ))}
                   </optgroup>
@@ -432,8 +434,8 @@ function ModelPickers({ provider, models, canList }: { provider: AiProvider; mod
 
       {provider.id === 'anthropic' && (
         <p className="text-xs text-muted">
-          The budget model is fine for quick notes but has added details that weren't said in testing; prefer the
-          default for summaries and answers.
+          The budget model is fine for notes and background work but has added details that weren't said in testing;
+          choose a stronger one here if action items seem off, and keep the default for summaries and answers.
         </p>
       )}
     </div>

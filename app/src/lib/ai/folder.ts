@@ -9,7 +9,7 @@ import { formatDate, formatDuration, formatTimestamp } from '../format';
 import { getSettings } from '../settings';
 import { type ItemEvidence, normalizeForQuote, triageItem } from './triage';
 import type { ActionItem, ActionItemStatus, AiDoc, ChatMessage, ExtractionTemplate, Folder, Meeting } from '../types';
-import { estimateCost, runAi, type AiResult, type AiTool, type AiToolCall } from './index';
+import { estimateCost, runAi, usageNote, type AiResult, type AiTool, type AiToolCall } from './index';
 import {
   briefingText,
   contextBlock,
@@ -21,6 +21,7 @@ import {
   type ChatExchange,
 } from './meeting';
 import { formatTranscript, languageInstruction, toPromptLines } from './prompts';
+import { TASK_RULES, parseProposal, taskListText, visibleAnswer } from './tasks';
 
 export interface FolderAiOptions {
   signal?: AbortSignal;
@@ -112,7 +113,7 @@ export async function updateFolderSummary(folderId: number, meetingId: number, o
   const previous = (await db.getAiDoc('folder', folderId, 'folder_summary'))?.content ?? '';
 
   const result = await runAi(
-    'summary',
+    'background',
     {
       system: systemFor(FOLDER_SUMMARY_ROLE, folder),
       messages: [
@@ -144,10 +145,10 @@ export async function rebuildFolderSummary(folderId: number, opts: FolderAiOptio
   }
   if (!parts.length) throw new Error('No meeting in this folder has a summary yet. Summarise a meeting first.');
   const result = await runAi(
-    'summary',
+    'background',
     {
       system: systemFor(FOLDER_SUMMARY_ROLE, folder),
-      context: `Folder: ${folder.name}\n\nMeeting summaries, oldest first:\n\n${parts.join('\n\n')}`,
+      context: [`Folder: ${folder.name}\n\nMeeting summaries, oldest first:\n\n${parts.join('\n\n')}`],
       messages: [{ role: 'user', content: 'Write the folder summary from these meetings.' }],
       maxTokens: 8000,
       model: opts.model || undefined,
@@ -240,21 +241,27 @@ function itemLine(a: ActionItem): string {
 export async function reconcileActionItems(folderId: number, meetingId: number, opts: FolderAiOptions = {}): Promise<ReconcileResult> {
   const folder = await requireFolder(folderId);
   const ctx = await loadMeetingContext(meetingId);
-  // Items this meeting's previous run added get replaced below, so they don't count.
-  const existing = (await db.listActionItems(folderId)).filter((a) => a.firstSeenMeeting !== meetingId);
+  const all = await db.listActionItems(folderId);
+  const hasSubtasks = new Set(all.map((a) => a.parentId));
+  // A previous run's unfinished items get replaced below, so they don't count.
+  // Completed ones and ones with subtasks are the user's and stay.
+  const replaced = (a: ActionItem) => a.firstSeenMeeting === meetingId && (a.status === 'open' || a.status === 'suggested') && !hasSubtasks.has(a.id);
+  const existing = all.filter((a) => !replaced(a));
   const open = existing.filter((a) => a.status === 'open');
   const suggestions = existing.filter((a) => a.status === 'suggested');
+  const finished = existing.filter((a) => a.status === 'done' || a.status === 'dropped');
   const summary = await meetingSummaryText(ctx.meeting);
 
-  const result = await runAi('summary', {
+  const result = await runAi('background', {
     system: [RECONCILE_ROLE, languageInstruction(getSettings().aiOutputLanguage), briefingText(ctx.meeting, folder)].filter(Boolean).join('\n\n'),
-    context: contextBlock(ctx),
+    context: [contextBlock(ctx)],
     messages: [
       {
         role: 'user',
         content:
           `Open action items in "${folder.name}":\n${open.map(itemLine).join('\n') || '(none)'}\n\n` +
           (suggestions.length ? `Earlier suggestions (no updates for these):\n${suggestions.map((a) => `- ${a.text}`).join('\n')}\n\n` : '') +
+          (finished.length ? `Already finished (no updates, don't add them again):\n${finished.map((a) => `- ${a.text}`).join('\n')}\n\n` : '') +
           (summary ? `Summary of this meeting:\n${summary}\n\n` : '') +
           'Return the updates and new items as JSON.',
       },
@@ -268,9 +275,7 @@ export async function reconcileActionItems(folderId: number, meetingId: number, 
   if (!out || !Array.isArray(out.updates) || !Array.isArray(out.new_items)) throw new Error('The model returned no usable action items.');
 
   // Re-running for the same meeting replaces the items it added before.
-  for (const a of await db.listMeetingActionItems(meetingId)) {
-    if (a.folderId === folderId && a.firstSeenMeeting === meetingId) await db.deleteActionItem(a.id);
-  }
+  for (const a of all.filter(replaced)) await db.deleteActionItem(a.id);
 
   const openIds = new Map(open.map((a) => [a.id, a]));
   let updated = 0;
@@ -305,6 +310,7 @@ export async function reconcileActionItems(folderId: number, meetingId: number, 
     else suggested++;
   }
   await updateFolderState(folderId, (s) => ({ ...s, progressMeetings: addId(s.progressMeetings, meetingId) }));
+  tasksChanged(folderId);
   return { updated, added, suggested, costUsd: costOf(result) };
 }
 
@@ -331,9 +337,9 @@ export async function extractMeeting(templateId: number, meetingId: number, opts
   if (!t) throw new Error('This template no longer exists.');
   if (!t.fields.length) throw new Error('Add at least one field to the template.');
   const ctx = await loadMeetingContext(meetingId);
-  const result = await runAi('summary', {
+  const result = await runAi('background', {
     system: [EXTRACT_ROLE, languageInstruction(getSettings().aiOutputLanguage), briefingText(ctx.meeting, ctx.folder)].filter(Boolean).join('\n\n'),
-    context: contextBlock(ctx),
+    context: [contextBlock(ctx)],
     messages: [
       {
         role: 'user',
@@ -507,34 +513,35 @@ Be direct and concise. Use Markdown sparingly (short paragraphs, bullet lists, n
 async function folderChatContext(folder: Folder): Promise<string> {
   const meetings = await db.listFolderMeetings(folder.id);
   const summary = await db.getAiDoc('folder', folder.id, 'folder_summary');
-  const items = (await db.listActionItems(folder.id)).filter((a) => a.status === 'open');
   return [
     `Folder: ${folder.name}`,
     `Meetings (oldest first):\n${meetings.map((m) => `- meeting ${m.id}: ${meetingLabel(m)}`).join('\n') || '(none)'}`,
     summary ? `Folder summary:\n${summary.content}` : '',
-    items.length ? `Open action items:\n${items.map((a) => `- ${a.text}${a.owner ? ` (${a.owner})` : ''}`).join('\n')}` : '',
   ]
     .filter(Boolean)
     .join('\n\n');
 }
 
-// One chat turn with the folder tools. Both turns are saved once the answer
-// is complete, like askMeeting.
+// One chat turn with the folder tools. A null conversation starts a new one.
+// Both turns are saved once the answer is complete, like askMeeting.
 export async function askFolder(
   folderId: number,
   question: string,
-  opts: FolderAiOptions & { onTool?: (call: AiToolCall) => void } = {},
+  opts: FolderAiOptions & { onTool?: (call: AiToolCall) => void; conversationId?: number | null } = {},
 ): Promise<ChatExchange> {
   const q = question.trim();
   if (!q) throw new Error('Type a question first.');
   const folder = await requireFolder(folderId);
-  const history: ChatMessage[] = await db.listChatMessages('folder', folderId);
+  const history: ChatMessage[] = opts.conversationId != null ? await db.listChatMessages('folder', folderId, opts.conversationId) : [];
+  const tasks = await db.listActionItems(folderId);
   const result = await runAi(
     'summary',
     {
-      system: [FOLDER_CHAT_ROLE, languageInstruction(getSettings().aiOutputLanguage), folderBriefing(folder)].filter(Boolean).join('\n\n'),
-      context: await folderChatContext(folder),
+      system: [FOLDER_CHAT_ROLE, TASK_RULES, languageInstruction(getSettings().aiOutputLanguage), folderBriefing(folder)].filter(Boolean).join('\n\n'),
+      context: [await folderChatContext(folder)],
       messages: toAiMessages(history, q),
+      conversation: true,
+      turnContext: taskListText(tasks),
       tools: FOLDER_TOOLS,
       runTool: (call) => runFolderTool(folderId, call),
       maxToolRounds: 10,
@@ -543,19 +550,26 @@ export async function askFolder(
       model: opts.model || undefined,
       signal: opts.signal,
     },
-    { onText: (_d, text) => opts.onText?.(text), onToolCall: opts.onTool },
+    { onText: (_d, text) => opts.onText?.(visibleAnswer(text)), onToolCall: opts.onTool },
   );
-  const text = result.text.trim();
-  if (!text) throw new Error(result.stopReason === 'refusal' ? 'The model declined to answer.' : 'The model returned an empty answer.');
-  const saved = await db.addChatMessage('folder', folderId, 'user', q);
-  const answer = await db.addChatMessage('folder', folderId, 'assistant', text + truncationNote(result));
-  return { question: saved, answer, costUsd: costOf(result), model: result.model };
+  const proposal = parseProposal(result.text, tasks);
+  const text = visibleAnswer(result.text).trim();
+  if (!text && !proposal) throw new Error(result.stopReason === 'refusal' ? 'The model declined to answer.' : 'The model returned an empty answer.');
+  const conversationId = opts.conversationId ?? (await db.createConversation('folder', folderId, q));
+  const saved = await db.addChatMessage('folder', folderId, conversationId, 'user', q);
+  const answer = await db.addChatMessage('folder', folderId, conversationId, 'assistant', (text || 'Proposed task changes:') + truncationNote(result), proposal);
+  return { question: saved, answer, costUsd: costOf(result), model: result.model, conversationId, note: usageNote(result.usage) };
 }
 
 // ---------- Automatic updates ----------
 
-// What's running per folder, for the folder screen.
-export const useFolderAi = create<{ busy: Record<number, string> }>(() => ({ busy: {} }));
+// What's running per folder, for the folder screen. `tasks` counts changes to a
+// folder's tasks, so every open Progress panel reloads.
+export const useFolderAi = create<{ busy: Record<number, string>; tasks: Record<number, number> }>(() => ({ busy: {}, tasks: {} }));
+
+export function tasksChanged(folderId: number): void {
+  useFolderAi.setState((s) => ({ tasks: { ...s.tasks, [folderId]: (s.tasks[folderId] ?? 0) + 1 } }));
+}
 
 function setBusy(folderId: number, message: string | null): void {
   useFolderAi.setState((s) => {

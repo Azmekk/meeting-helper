@@ -33,7 +33,7 @@ export function toCsv(template: ExtractionTemplate, meetings: Meeting[], rows: M
 
 export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: Meeting[] }) {
   const hasKey = useAiKey();
-  const [model, setModel] = useAiModel();
+  const [model, setModel] = useAiModel('background', 'extraction');
   const autoBusy = useFolderAi((s) => s.busy[folder.id]);
   const [templates, setTemplates] = useState<ExtractionTemplate[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);

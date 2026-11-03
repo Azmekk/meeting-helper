@@ -2,7 +2,7 @@
 // how rolling notes read the meeting.
 import { setLiveEnabled, setOverlayProtected } from '../../lib/live';
 import { useSettings } from '../../lib/settings';
-import { NotesContextToggle } from '../record/LivePanel';
+import { NotesContextToggle, NotesIntervalToggle } from '../record/LivePanel';
 import { hotkeyLabel } from '../live/shared';
 import { Card, SettingRow, Switch } from '../ui';
 import { CommitInput, saveSettings } from './common';
@@ -58,6 +58,7 @@ export function LiveSection() {
 
         <div className="flex flex-col gap-1.5">
           <span className="text-[13px] font-medium">Rolling notes</span>
+          <NotesIntervalToggle minutes={s.liveNotesIntervalMin} />
           <NotesContextToggle mode={s.liveNotesContext} />
         </div>
       </div>

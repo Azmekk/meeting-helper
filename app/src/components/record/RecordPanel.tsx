@@ -162,6 +162,7 @@ export default function RecordPanel() {
             </div>
           </div>
 
+          <AudioOnly recording={recording} />
           {splitTracks && <OthersInRoom recording={recording} />}
           <RecordingTerms recording={recording} />
 
@@ -251,6 +252,27 @@ export default function RecordPanel() {
         </div>
       )}
     </Card>
+  );
+}
+
+function AudioOnly({ recording }: { recording: boolean }) {
+  const on = useSettings((s) => s.settings.recordAudioOnly);
+  return (
+    <div className="flex items-start gap-3">
+      <Switch
+        label="Audio only"
+        checked={on}
+        disabled={recording}
+        onChange={(v) => void useSettings.getState().update({ recordAudioOnly: v })}
+      />
+      <div className="text-[13px]">
+        <div className="font-medium">Audio only</div>
+        <div className="text-muted">
+          Records your mic and computer sound without your screen, and keeps a small audio file. OBS goes back to its
+          scene when you stop.
+        </div>
+      </div>
+    </div>
   );
 }
 

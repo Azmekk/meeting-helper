@@ -1,6 +1,8 @@
 import { CircleDot, Folder, Library, Search, Settings as SettingsIcon, type LucideIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import logo from './assets/logo.svg';
 import { FfmpegDialog } from './components/FfmpegDialog';
 import { SidebarUpdateNotice, UpdateDialog } from './components/UpdateNotice';
@@ -9,6 +11,7 @@ import { RecordingSavedDialog } from './components/live/RecordingSavedDialog';
 import { ExternalRecordingDialog } from './components/record/ExternalRecordingDialog';
 import { initDb } from './lib/db';
 import { initLive } from './lib/live';
+import { linkToRoute } from './lib/mcp';
 import { initRemote } from './lib/remote';
 import { initRecorder, useRecorder } from './lib/obs';
 import { failInterruptedJobs, initJobCloseGuard, useJobs } from './lib/pipeline';
@@ -29,6 +32,23 @@ export default function App() {
   const [boot, setBoot] = useState<'loading' | 'ready' | { error: string }>('loading');
   const screen = useRef<HTMLDivElement>(null);
   useScreenFade(screen);
+  const navigate = useNavigate();
+
+  // meeting-helper:// links, from Claude Code, Codex or anywhere else.
+  useEffect(() => {
+    if (boot !== 'ready') return;
+    const openPending = () => {
+      invoke<string[]>('take_links')
+        .then((urls) => {
+          const route = urls.map(linkToRoute).filter(Boolean).pop();
+          if (route) navigate(route);
+        })
+        .catch(() => {});
+    };
+    openPending();
+    const off = listen('app://links', openPending);
+    return () => void off.then((f) => f());
+  }, [boot, navigate]);
 
   useEffect(() => {
     (async () => {

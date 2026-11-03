@@ -41,6 +41,8 @@ function supportsFallbacks(model: string): boolean {
 
 const EFFORT: Record<AiEffort, 'low' | 'medium' | 'high'> = { fast: 'low', normal: 'medium', deep: 'high' };
 
+const CACHE = { type: 'ephemeral', ttl: '1h' } as const;
+
 function toUsage(u: B.BetaUsage): AiUsage {
   return {
     inputTokens: u.input_tokens ?? 0,
@@ -114,10 +116,19 @@ export const anthropic: AiProvider = {
     const legacy = isLegacy(req.model);
     const fallbacks = supportsFallbacks(req.model);
 
-    // Prefix order is tools → system → messages; the context block carries the
-    // cache breakpoint so later calls reuse it.
-    const system: B.BetaTextBlockParam[] = [{ type: 'text', text: req.system }];
-    if (req.context) system.push({ type: 'text', text: req.context, cache_control: { type: 'ephemeral' } });
+    // Prefix order is tools → system → messages. Context blocks come first so
+    // tasks with different instructions share them. The hour-long cache outlives
+    // pauses in a chat and notes on a long interval. A request has 4 breakpoints:
+    // up to 2 or 3 on the newest context blocks, the rest on the conversation.
+    const contextBlocks = req.context ?? [];
+    const contextMarks = req.conversation ? 2 : 3;
+    const system: B.BetaTextBlockParam[] = contextBlocks.map((text, i) => ({
+      type: 'text',
+      text,
+      ...(i >= contextBlocks.length - contextMarks ? { cache_control: CACHE } : {}),
+    }));
+    if (req.contextTail) system.push({ type: 'text', text: req.contextTail });
+    system.push({ type: 'text', text: req.system });
 
     const tools: B.BetaTool[] | undefined = req.tools?.map((t) => ({
       name: t.name,
@@ -126,7 +137,15 @@ export const anthropic: AiProvider = {
       eager_input_streaming: true,
     }));
 
-    const messages: B.BetaMessageParam[] = req.messages.map((m) => ({ role: m.role, content: m.content }));
+    const messages: B.BetaMessageParam[] = req.messages.map((m, i) => {
+      if (i < req.messages.length - 1 || (!req.conversation && !req.turnContext)) return { role: m.role, content: m.content };
+      // The breakpoint sits on the question, before anything that changes per turn.
+      const content: B.BetaTextBlockParam[] = [
+        { type: 'text', text: m.content, ...(req.conversation ? { cache_control: CACHE } : {}) },
+      ];
+      if (req.turnContext) content.push({ type: 'text', text: req.turnContext });
+      return { role: m.role, content };
+    });
     let usage = EMPTY_USAGE;
     const maxRounds = req.maxToolRounds ?? 8;
 
@@ -138,10 +157,10 @@ export const anthropic: AiProvider = {
           system,
           messages,
           stream: true,
-          // Second breakpoint at the end of the conversation so chat history and
-          // tool rounds are cached too.
-          cache_control: { type: 'ephemeral' },
         };
+        // Follows the tool rounds as they grow. One-off calls and plain chat leave
+        // it out: it would pay to store text nothing reads back.
+        if (req.conversation && tools?.length) params.cache_control = CACHE;
         if (!legacy) {
           params.thinking = { type: 'adaptive' };
           params.output_config = { effort: EFFORT[req.effort ?? 'normal'] };

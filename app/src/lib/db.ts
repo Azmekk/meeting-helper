@@ -12,7 +12,9 @@ import type {
   AiDoc,
   AiDocKind,
   AiScope,
+  ChatConversation,
   ChatMessage,
+  TaskProposal,
   ExtractionField,
   ExtractionRow,
   ExtractionTemplate,
@@ -191,6 +193,22 @@ const MIGRATIONS: MigrationStep[][] = [
   [(d) => addColumn(d, 'meetings', 'split_tracks', 'INTEGER')],
   // v5: vocabulary per folder and per meeting (one term per line)
   [(d) => addColumn(d, 'meetings', 'terms', 'TEXT'), (d) => addColumn(d, 'folders', 'terms', 'TEXT')],
+  // v6: several chats per meeting or folder, task proposals in chat, subtasks
+  [
+    `CREATE TABLE IF NOT EXISTS chat_conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL,
+      owner_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_chat_conversations_owner ON chat_conversations(scope, owner_id)`,
+    (d) => addColumn(d, 'chat_messages', 'conversation_id', 'INTEGER'),
+    (d) => addColumn(d, 'chat_messages', 'proposal', 'TEXT'),
+    (d) => addColumn(d, 'action_items', 'parent_id', 'INTEGER'),
+    backfillConversations,
+  ],
 ];
 
 // SQLite has no ADD COLUMN IF NOT EXISTS; check first so re-runs are safe.
@@ -198,6 +216,34 @@ async function addColumn(d: Database, table: string, column: string, decl: strin
   const cols = await d.select<{ name: string }[]>(`PRAGMA table_info(${table})`);
   if (cols.some((c) => c.name === column)) return;
   await d.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+}
+
+// Existing messages become each meeting's or folder's first conversation.
+async function backfillConversations(d: Database): Promise<void> {
+  const owners = await d.select<{ scope: string; owner_id: number }[]>(
+    'SELECT DISTINCT scope, owner_id FROM chat_messages WHERE conversation_id IS NULL',
+  );
+  for (const o of owners) {
+    const first = await d.select<{ content: string; created_at: string }[]>(
+      `SELECT content, created_at FROM chat_messages WHERE scope = $1 AND owner_id = $2 AND conversation_id IS NULL
+       ORDER BY CASE role WHEN 'user' THEN 0 ELSE 1 END, id LIMIT 1`,
+      [o.scope, o.owner_id],
+    );
+    const res = await d.execute(
+      'INSERT INTO chat_conversations (scope, owner_id, title, created_at, updated_at) VALUES ($1, $2, $3, $4, $4)',
+      [o.scope, o.owner_id, conversationTitle(first[0]?.content ?? 'Chat'), first[0]?.created_at ?? now()],
+    );
+    await d.execute('UPDATE chat_messages SET conversation_id = $1 WHERE scope = $2 AND owner_id = $3 AND conversation_id IS NULL', [
+      Number(res.lastInsertId),
+      o.scope,
+      o.owner_id,
+    ]);
+  }
+}
+
+function conversationTitle(question: string): string {
+  const text = question.replace(/\s+/g, ' ').trim();
+  return text.length > 60 ? `${text.slice(0, 57)}…` : text;
 }
 
 async function backfillMeetingUids(d: Database): Promise<void> {
@@ -497,6 +543,7 @@ export async function deleteMeeting(id: number): Promise<void> {
   await d.execute('DELETE FROM transcripts WHERE meeting_id = $1', [id]);
   await d.execute("DELETE FROM ai_docs WHERE scope = 'meeting' AND owner_id = $1", [id]);
   await d.execute("DELETE FROM chat_messages WHERE scope = 'meeting' AND owner_id = $1", [id]);
+  await d.execute("DELETE FROM chat_conversations WHERE scope = 'meeting' AND owner_id = $1", [id]);
   await d.execute('DELETE FROM action_items WHERE meeting_id = $1', [id]);
   await d.execute('DELETE FROM extraction_rows WHERE meeting_id = $1', [id]);
   await d.execute('DELETE FROM meetings WHERE id = $1', [id]);
@@ -558,6 +605,7 @@ export async function deleteFolder(id: number): Promise<void> {
   await d.execute('UPDATE meetings SET folder_id = NULL, updated_at = $1 WHERE folder_id = $2', [now(), id]);
   await d.execute("DELETE FROM ai_docs WHERE scope = 'folder' AND owner_id = $1", [id]);
   await d.execute("DELETE FROM chat_messages WHERE scope = 'folder' AND owner_id = $1", [id]);
+  await d.execute("DELETE FROM chat_conversations WHERE scope = 'folder' AND owner_id = $1", [id]);
   await d.execute('DELETE FROM action_items WHERE folder_id = $1', [id]);
   await d.execute(
     'DELETE FROM extraction_rows WHERE template_id IN (SELECT id FROM extraction_templates WHERE folder_id = $1)',
@@ -868,6 +916,8 @@ interface ChatMessageRow {
   owner_id: number;
   role: 'user' | 'assistant';
   content: string;
+  conversation_id: number | null;
+  proposal: string | null;
   created_at: string;
 }
 
@@ -889,7 +939,18 @@ const toChatMessage = (r: ChatMessageRow): ChatMessage => ({
   role: r.role,
   content: r.content,
   createdAt: r.created_at,
+  conversationId: r.conversation_id,
+  proposal: parseProposal(r.proposal),
 });
+
+function parseProposal(raw: string | null): TaskProposal | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as TaskProposal;
+  } catch {
+    return null;
+  }
+}
 
 // Only meeting-scoped data counts as meeting content for backup.
 async function touchOwner(scope: AiScope, ownerId: number): Promise<void> {
@@ -958,11 +1019,39 @@ export async function deleteAiDoc(scope: AiScope, ownerId: number, kind: AiDocKi
   await touchOwner(scope, ownerId);
 }
 
-// Oldest first.
-export async function listChatMessages(scope: AiScope, ownerId: number): Promise<ChatMessage[]> {
-  const rows = await conn().select<ChatMessageRow[]>(
-    'SELECT * FROM chat_messages WHERE scope = $1 AND owner_id = $2 ORDER BY id',
+// Newest activity first.
+export async function listConversations(scope: AiScope, ownerId: number): Promise<ChatConversation[]> {
+  const rows = await conn().select<{ id: number; scope: AiScope; owner_id: number; title: string; created_at: string; updated_at: string }[]>(
+    'SELECT * FROM chat_conversations WHERE scope = $1 AND owner_id = $2 ORDER BY updated_at DESC, id DESC',
     [scope, ownerId],
+  );
+  return rows.map((r) => ({ id: r.id, scope: r.scope, ownerId: r.owner_id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at }));
+}
+
+// Titled from the first question, so naming a chat costs nothing.
+export async function createConversation(scope: AiScope, ownerId: number, question: string, createdAt = now()): Promise<number> {
+  const res = await conn().execute(
+    'INSERT INTO chat_conversations (scope, owner_id, title, created_at, updated_at) VALUES ($1, $2, $3, $4, $4)',
+    [scope, ownerId, conversationTitle(question), createdAt],
+  );
+  if (res.lastInsertId == null) throw new Error('createConversation: no id returned');
+  return Number(res.lastInsertId);
+}
+
+export async function deleteConversation(conversation: Pick<ChatConversation, 'id' | 'scope' | 'ownerId'>): Promise<void> {
+  const d = conn();
+  await d.execute('DELETE FROM chat_messages WHERE conversation_id = $1', [conversation.id]);
+  await d.execute('DELETE FROM chat_conversations WHERE id = $1', [conversation.id]);
+  await touchOwner(conversation.scope, conversation.ownerId);
+}
+
+// Oldest first. Without a conversation: every chat of this meeting or folder.
+export async function listChatMessages(scope: AiScope, ownerId: number, conversationId?: number): Promise<ChatMessage[]> {
+  const rows = await conn().select<ChatMessageRow[]>(
+    conversationId == null
+      ? 'SELECT * FROM chat_messages WHERE scope = $1 AND owner_id = $2 ORDER BY id'
+      : 'SELECT * FROM chat_messages WHERE scope = $1 AND owner_id = $2 AND conversation_id = $3 ORDER BY id',
+    conversationId == null ? [scope, ownerId] : [scope, ownerId, conversationId],
   );
   return rows.map(toChatMessage);
 }
@@ -970,22 +1059,24 @@ export async function listChatMessages(scope: AiScope, ownerId: number): Promise
 export async function addChatMessage(
   scope: AiScope,
   ownerId: number,
+  conversationId: number,
   role: ChatMessage['role'],
   content: string,
+  proposal: TaskProposal | null = null,
 ): Promise<ChatMessage> {
   const createdAt = now();
   const res = await conn().execute(
-    'INSERT INTO chat_messages (scope, owner_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)',
-    [scope, ownerId, role, content, createdAt],
+    'INSERT INTO chat_messages (scope, owner_id, conversation_id, role, content, proposal, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+    [scope, ownerId, conversationId, role, content, proposal ? JSON.stringify(proposal) : null, createdAt],
   );
   if (res.lastInsertId == null) throw new Error('addChatMessage: no id returned');
+  await conn().execute('UPDATE chat_conversations SET updated_at = $1 WHERE id = $2', [createdAt, conversationId]);
   await touchOwner(scope, ownerId);
-  return { id: Number(res.lastInsertId), scope, ownerId, role, content, createdAt };
+  return { id: Number(res.lastInsertId), scope, ownerId, conversationId, role, content, proposal, createdAt };
 }
 
-export async function clearChat(scope: AiScope, ownerId: number): Promise<void> {
-  await conn().execute('DELETE FROM chat_messages WHERE scope = $1 AND owner_id = $2', [scope, ownerId]);
-  await touchOwner(scope, ownerId);
+export async function setMessageProposal(id: number, proposal: TaskProposal): Promise<void> {
+  await conn().execute('UPDATE chat_messages SET proposal = $1 WHERE id = $2', [JSON.stringify(proposal), id]);
 }
 
 export type { Segment };
@@ -1125,6 +1216,7 @@ interface ActionItemRow {
   first_seen_meeting: number | null;
   last_update_meeting: number | null;
   source_ms: number | null;
+  parent_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -1139,6 +1231,7 @@ const toActionItem = (r: ActionItemRow): ActionItem => ({
   firstSeenMeeting: r.first_seen_meeting,
   lastUpdateMeeting: r.last_update_meeting,
   sourceMs: r.source_ms,
+  parentId: r.parent_id,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -1170,8 +1263,8 @@ export async function addActionItem(item: Omit<ActionItem, 'id' | 'createdAt' | 
   const updatedAt = item.updatedAt ?? createdAt;
   const res = await conn().execute(
     `INSERT INTO action_items (folder_id, meeting_id, text, owner, status, first_seen_meeting, last_update_meeting,
-       source_ms, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       source_ms, parent_id, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       item.folderId,
       item.meetingId,
@@ -1181,6 +1274,7 @@ export async function addActionItem(item: Omit<ActionItem, 'id' | 'createdAt' | 
       item.firstSeenMeeting,
       item.lastUpdateMeeting,
       item.sourceMs,
+      item.parentId ?? null,
       createdAt,
       updatedAt,
     ],
@@ -1199,11 +1293,12 @@ const ACTION_ITEM_COLUMNS: Record<string, string> = {
   lastUpdateMeeting: 'last_update_meeting',
   sourceMs: 'source_ms',
   meetingId: 'meeting_id',
+  parentId: 'parent_id',
 };
 
 export async function updateActionItem(
   id: number,
-  patch: Partial<Pick<ActionItem, 'text' | 'owner' | 'status' | 'firstSeenMeeting' | 'lastUpdateMeeting' | 'sourceMs' | 'meetingId'>>,
+  patch: Partial<Pick<ActionItem, 'text' | 'owner' | 'status' | 'firstSeenMeeting' | 'lastUpdateMeeting' | 'sourceMs' | 'meetingId' | 'parentId'>>,
 ): Promise<void> {
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -1231,6 +1326,8 @@ export async function deleteActionItem(id: number): Promise<void> {
     'SELECT meeting_id, folder_id FROM action_items WHERE id = $1',
     [id],
   );
+  // Its subtasks stay, as ordinary tasks.
+  await conn().execute('UPDATE action_items SET parent_id = NULL WHERE parent_id = $1', [id]);
   await conn().execute('DELETE FROM action_items WHERE id = $1', [id]);
   await touchItemMeeting(rows[0]?.meeting_id ?? null);
   await touchFolder(rows[0]?.folder_id ?? null);
@@ -1424,6 +1521,7 @@ export async function deleteMeetingContent(id: number): Promise<void> {
   await d.execute('UPDATE meetings SET active_transcript_id = NULL WHERE id = $1', [id]);
   await d.execute("DELETE FROM ai_docs WHERE scope = 'meeting' AND owner_id = $1", [id]);
   await d.execute("DELETE FROM chat_messages WHERE scope = 'meeting' AND owner_id = $1", [id]);
+  await d.execute("DELETE FROM chat_conversations WHERE scope = 'meeting' AND owner_id = $1", [id]);
   await d.execute('DELETE FROM action_items WHERE meeting_id = $1', [id]);
   await d.execute('DELETE FROM extraction_rows WHERE meeting_id = $1', [id]);
 }
@@ -1515,10 +1613,39 @@ export async function insertImportedAiDoc(doc: Omit<AiDoc, 'id'>): Promise<void>
   );
 }
 
+// Chats for a bundle. Proposals stay out: they point at this database's task
+// ids, and applied ones are already in the tasks.
+export async function exportChat(scope: AiScope, ownerId: number) {
+  const titles = new Map((await listConversations(scope, ownerId)).map((c) => [c.id, c.title]));
+  return (await listChatMessages(scope, ownerId)).map((m) => ({
+    role: m.role,
+    content: m.content,
+    createdAt: m.createdAt,
+    conversation: (m.conversationId != null && titles.get(m.conversationId)) || undefined,
+  }));
+}
+
+export async function importChat(
+  scope: AiScope,
+  ownerId: number,
+  messages: { role: ChatMessage['role']; content: string; createdAt: string; conversation?: string }[],
+): Promise<void> {
+  const ids = new Map<string, number>();
+  for (const m of messages) {
+    const key = m.conversation ?? '';
+    let conversationId = ids.get(key);
+    if (conversationId == null) {
+      conversationId = await createConversation(scope, ownerId, m.conversation ?? m.content, m.createdAt);
+      ids.set(key, conversationId);
+    }
+    await insertImportedChatMessage({ scope, ownerId, ...m, conversationId });
+  }
+}
+
 export async function insertImportedChatMessage(m: Omit<ChatMessage, 'id'>): Promise<void> {
   await conn().execute(
-    'INSERT INTO chat_messages (scope, owner_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)',
-    [m.scope, m.ownerId, m.role, m.content, m.createdAt],
+    'INSERT INTO chat_messages (scope, owner_id, conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5, $6)',
+    [m.scope, m.ownerId, m.conversationId ?? null, m.role, m.content, m.createdAt],
   );
 }
 
@@ -1663,6 +1790,7 @@ export async function deleteFolderContent(folderId: number): Promise<void> {
   const d = conn();
   await d.execute("DELETE FROM ai_docs WHERE scope = 'folder' AND owner_id = $1", [folderId]);
   await d.execute("DELETE FROM chat_messages WHERE scope = 'folder' AND owner_id = $1", [folderId]);
+  await d.execute("DELETE FROM chat_conversations WHERE scope = 'folder' AND owner_id = $1", [folderId]);
   await d.execute('DELETE FROM action_items WHERE folder_id = $1 AND meeting_id IS NULL', [folderId]);
 }
 

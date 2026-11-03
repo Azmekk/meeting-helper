@@ -55,9 +55,12 @@ export interface MeetingBundle {
   folder: { uid: string; name: string; dirName: string; briefing: string | null } | null;
   transcripts: BundleTranscript[];
   aiDocs: { kind: AiDocKind; content: string; model: string | null; createdAt: string; costUsd: number | null }[];
-  chat: { role: 'user' | 'assistant'; content: string; createdAt: string }[];
+  // `conversation` is the chat's title; missing in bundles from older versions.
+  chat: { role: 'user' | 'assistant'; content: string; createdAt: string; conversation?: string }[];
   // Items first raised in this meeting. Meeting references are uids.
   actionItems: {
+    key?: number; // links subtasks to their parent within this bundle
+    parentKey?: number | null;
     text: string;
     owner: string | null;
     status: ActionItemStatus;
@@ -150,6 +153,8 @@ export async function buildBundle(meetingId: number): Promise<MeetingBundle> {
   const actionItems: MeetingBundle['actionItems'] = [];
   for (const a of await db.listMeetingActionItems(meetingId)) {
     actionItems.push({
+      key: a.id,
+      parentKey: a.parentId ?? null,
       text: a.text,
       owner: a.owner,
       status: a.status,
@@ -195,7 +200,7 @@ export async function buildBundle(meetingId: number): Promise<MeetingBundle> {
       createdAt: d.createdAt,
       costUsd: d.costUsd,
     })),
-    chat: (await db.listChatMessages('meeting', meetingId)).map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt })),
+    chat: await db.exportChat('meeting', meetingId),
     actionItems,
     extractions,
   };
@@ -383,17 +388,16 @@ export async function importBundle(
     for (const d of b.aiDocs) {
       await db.insertImportedAiDoc({ scope: 'meeting', ownerId: meetingId, ...d, content: remapCitations(d.content, segmentIds) });
     }
-    for (const m of b.chat) {
-      await db.insertImportedChatMessage({ scope: 'meeting', ownerId: meetingId, ...m, content: remapCitations(m.content, segmentIds) });
-    }
+    await db.importChat('meeting', meetingId, b.chat.map((m) => ({ ...m, content: remapCitations(m.content, segmentIds) })));
 
     const localId = async (uid: string | null): Promise<number | null> => {
       if (!uid) return null;
       if (uid === b.meeting.uid) return meetingId;
       return (await db.getMeetingByUid(uid))?.id ?? null;
     };
+    const itemIds = new Map<number, number>();
     for (const a of b.actionItems) {
-      await db.addActionItem({
+      const item = await db.addActionItem({
         folderId,
         meetingId,
         text: a.text,
@@ -406,6 +410,11 @@ export async function importBundle(
         createdAt: a.createdAt,
         updatedAt: a.updatedAt,
       });
+      if (a.key != null) itemIds.set(a.key, item.id);
+    }
+    for (const a of b.actionItems) {
+      const parent = a.parentKey != null ? itemIds.get(a.parentKey) : undefined;
+      if (a.key != null && parent != null) await db.updateActionItem(itemIds.get(a.key)!, { parentId: parent });
     }
 
     // Templates belong to folders; rows of an unfiled meeting have nowhere to go.

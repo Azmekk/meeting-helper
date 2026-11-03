@@ -29,7 +29,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 # Same major version tauri-plugin-http already uses, so it's built only once.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart", "stream"] }
-tokio = { version = "1", features = ["fs", "process", "io-util", "time", "sync", "macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["fs", "process", "io-util", "io-std", "time", "sync", "macros", "rt", "rt-multi-thread"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
@@ -38,6 +38,9 @@ base64 = "0.22"
 local-ip-address = "0.6.13"
 rusty-s3 = "0.11"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# The MCP server (mcp.rs) opens the same database as tauri-plugin-sql, with the same sqlx.
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
+tauri-plugin-deep-link = "2"
 
 # Each OS keeps secrets in its own store: Credential Manager, Keychain, or the
 # Secret Service (GNOME Keyring / KWallet; needs libdbus-1-dev to build).
@@ -53,6 +56,7 @@ keyring = { version = "3", features = ["sync-secret-service"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2.4.1"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

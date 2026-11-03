@@ -25,6 +25,8 @@ export interface Settings {
   obsPort: number;
   // Last OBS scene picked on the Record screen.
   obsScene: string;
+  // Record sound only: OBS records an empty scene and the app keeps just the audio.
+  recordAudioOnly: boolean;
   // OBS Noise Suppression (RNNoise) on the recorded mic, if it has no noise filter.
   micNoiseSuppression: boolean;
   // Look for a newer release on GitHub at start-up and every few hours.
@@ -36,7 +38,8 @@ export interface Settings {
   aiCustomBaseUrl: string; // OpenAI-compatible base URL, e.g. https://openrouter.ai/api/v1
   aiLiveModel: string; // rolling live notes
   aiAnswerModel: string; // "help me answer"
-  aiSummaryModel: string; // summaries, chat, folder work
+  aiSummaryModel: string; // summaries and chat
+  aiBackgroundModel: string; // action items, folder summary, extraction
   // Which models the pickers list: the newest of each family, everything, or
   // the ones ticked in Settings → AI (aiCustomModels).
   aiModelList: 'latest' | 'all' | 'custom';
@@ -55,6 +58,12 @@ export interface Settings {
   // ~90 s (flat cost), 'full' = the whole transcript so far as cached context
   // (better recall of earlier parts; cost grows with meeting length).
   liveNotesContext: 'notes' | 'full';
+  // Minutes between rolling-notes updates. 0 = only when "Update now" is pressed.
+  liveNotesIntervalMin: number;
+  // Bumped when a default changes for existing users too (see load()).
+  settingsVersion: number;
+  // Settings → MCP: Claude Code, Codex etc. may change tasks. Read by mcp.rs too.
+  mcpAllowWrites: boolean;
   // Folders. '' = no base folder: meetings aren't kept in their own directories.
   baseFolder: string;
   // After a meeting in a folder gets its summary, update the folder summary,
@@ -98,6 +107,7 @@ export const DEFAULT_SETTINGS: Settings = {
   obsHost: '127.0.0.1',
   obsPort: 4455,
   obsScene: '',
+  recordAudioOnly: false,
   micNoiseSuppression: true,
   checkForUpdates: true,
   skippedVersion: '',
@@ -106,6 +116,7 @@ export const DEFAULT_SETTINGS: Settings = {
   aiLiveModel: '',
   aiAnswerModel: '',
   aiSummaryModel: '',
+  aiBackgroundModel: '',
   aiModelList: 'latest',
   aiCustomModels: [],
   aiOutputLanguage: 'meeting',
@@ -113,7 +124,10 @@ export const DEFAULT_SETTINGS: Settings = {
   liveHotkey: 'CommandOrControl+Alt+H',
   liveModelSwitchWarningOff: false,
   overlayContentProtected: true,
-  liveNotesContext: 'notes',
+  liveNotesContext: 'full',
+  liveNotesIntervalMin: 2,
+  settingsVersion: 1,
+  mcpAllowWrites: true,
   baseFolder: '',
   folderAiAuto: true,
   backupEndpoint: '',
@@ -150,7 +164,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
   async load() {
     store = await load('settings.json', { autoSave: false, defaults: {} });
     const saved = (await store.get<Partial<Settings>>('settings')) ?? {};
-    set({ settings: { ...DEFAULT_SETTINGS, ...saved }, loaded: true });
+    // Settings are saved whole, so a changed default doesn't reach existing users
+    // by itself. v1: rolling notes read the whole meeting from cache by default.
+    if ((saved.settingsVersion ?? 0) < 1) delete saved.liveNotesContext;
+    set({ settings: { ...DEFAULT_SETTINGS, ...saved, settingsVersion: DEFAULT_SETTINGS.settingsVersion }, loaded: true });
   },
 
   async update(patch) {

@@ -35,8 +35,11 @@ export interface FolderBundle {
   aiDocs: { kind: AiDocKind; content: string; model: string | null; createdAt: string; costUsd: number | null }[];
   // Folder AI bookkeeping, with meeting uids instead of local ids.
   state: { summaryMeetings: string[]; progressMeetings: string[] } | null;
-  chat: { role: 'user' | 'assistant'; content: string; createdAt: string }[];
+  // `conversation` is the chat's title; missing in bundles from older versions.
+  chat: { role: 'user' | 'assistant'; content: string; createdAt: string; conversation?: string }[];
   actionItems: {
+    key?: number; // links subtasks to their parent within this bundle
+    parentKey?: number | null;
     text: string;
     owner: string | null;
     status: ActionItemStatus;
@@ -87,7 +90,7 @@ export async function buildFolderBundle(folderId: number): Promise<FolderBundle>
   const aiDocs = docs
     .filter((d) => d.kind !== 'folder_state')
     .map((d) => ({ kind: d.kind, content: d.content, model: d.model, createdAt: d.createdAt, costUsd: d.costUsd }));
-  const chat = (await db.listChatMessages('folder', folderId)).map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt }));
+  const chat = await db.exportChat('folder', folderId);
 
   const segments: FolderBundle['segments'] = {};
   const ids = [...aiDocs, ...chat].flatMap((x) => citedIds(x.content));
@@ -99,6 +102,8 @@ export async function buildFolderBundle(folderId: number): Promise<FolderBundle>
   const actionItems: FolderBundle['actionItems'] = [];
   for (const a of await db.listUnattachedActionItems(folderId)) {
     actionItems.push({
+      key: a.id,
+      parentKey: a.parentId ?? null,
       text: a.text,
       owner: a.owner,
       status: a.status,
@@ -217,11 +222,10 @@ export async function finishFolderBundles(prepared: PreparedFolder[]): Promise<n
       });
       await db.insertImportedAiDoc({ scope: 'folder', ownerId: folderId, kind: 'folder_state', content, model: null, createdAt: b.exportedAt, costUsd: null });
     }
-    for (const m of b.chat) {
-      await db.insertImportedChatMessage({ scope: 'folder', ownerId: folderId, ...m, content: remapCitations(m.content, segIds) });
-    }
+    await db.importChat('folder', folderId, b.chat.map((m) => ({ ...m, content: remapCitations(m.content, segIds) })));
+    const itemIds = new Map<number, number>();
     for (const a of b.actionItems) {
-      await db.addActionItem({
+      const item = await db.addActionItem({
         folderId,
         meetingId: null,
         text: a.text,
@@ -233,6 +237,11 @@ export async function finishFolderBundles(prepared: PreparedFolder[]): Promise<n
         createdAt: a.createdAt,
         updatedAt: a.updatedAt,
       });
+      if (a.key != null) itemIds.set(a.key, item.id);
+    }
+    for (const a of b.actionItems) {
+      const parent = a.parentKey != null ? itemIds.get(a.parentKey) : undefined;
+      if (a.key != null && parent != null) await db.updateActionItem(itemIds.get(a.key)!, { parentId: parent });
     }
     await db.upsertFolderTemplates(folderId, b.templates);
     // Last: the writes above bumped updated_at to "now".

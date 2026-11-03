@@ -1,7 +1,8 @@
 // OpenAI-compatible providers via the official `openai` SDK (Chat Completions):
 // OpenAI itself, DeepSeek, and any custom base URL (OpenRouter, Ollama, ...).
-// OpenAI and DeepSeek cache repeated prompt prefixes automatically, so the
-// context block just goes right after the system prompt.
+// Context goes first so tasks with different instructions share it. Current
+// OpenAI models get explicit cache breakpoints at stable boundaries; DeepSeek
+// and older models cache repeated prefixes automatically.
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import OpenAI from 'openai';
 import type { SecretName } from '../secrets';
@@ -52,13 +53,23 @@ function toUsage(u: OpenAI.CompletionUsage | undefined | null): AiUsage {
   // OpenAI: prompt_tokens_details.cached_tokens; DeepSeek: prompt_cache_hit_tokens.
   const raw = u as OpenAI.CompletionUsage & { prompt_cache_hit_tokens?: number };
   const cached = u.prompt_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens ?? 0;
+  const written = u.prompt_tokens_details?.cache_write_tokens ?? 0;
   return {
-    inputTokens: Math.max(0, (u.prompt_tokens ?? 0) - cached),
+    inputTokens: Math.max(0, (u.prompt_tokens ?? 0) - cached - written),
     cachedInputTokens: cached,
-    cacheWriteTokens: 0,
+    cacheWriteTokens: written,
     outputTokens: u.completion_tokens ?? 0,
   };
 }
+
+// GPT-5.6 and later take explicit breakpoints; without one, a prefix is only
+// saved at the end of the newest message, so a later call that differs there
+// (another question, a grown transcript) starts cold.
+function takesBreakpoints(flavor: Flavor, model: string): boolean {
+  return flavor.id === 'openai' && /^gpt-(5\.([6-9]|\d{2})|[6-9]|\d{2})/.test(model);
+}
+
+const BREAKPOINT = { prompt_cache_breakpoint: { mode: 'explicit' } } as const;
 
 function toStop(reason: string | null | undefined): AiStopReason {
   switch (reason) {
@@ -130,10 +141,28 @@ function makeProvider(flavor: Flavor): AiProvider {
       if (req.json && !schemaMode) {
         system += `\n\nReply with a single JSON object matching this JSON schema, and nothing else:\n${JSON.stringify(req.json.schema)}`;
       }
-      const messages: Chat[] = [{ role: 'system', content: system }];
-      // Separate message so the prefix (system + context) stays identical between calls.
-      if (req.context) messages.push({ role: 'system', content: req.context });
-      for (const m of req.messages) messages.push({ role: m.role, content: m.content });
+      const breakpoints = takesBreakpoints(flavor, req.model);
+      const messages: Chat[] = [];
+      if (breakpoints && req.context?.length) {
+        const parts: OpenAI.Chat.Completions.ChatCompletionContentPartText[] = req.context.map((text) => ({ type: 'text', text, ...BREAKPOINT }));
+        if (req.contextTail) parts.push({ type: 'text', text: req.contextTail });
+        messages.push({ role: 'system', content: parts });
+      } else if (req.context?.length || req.contextTail) {
+        messages.push({ role: 'system', content: [...(req.context ?? []), req.contextTail ?? ''].filter(Boolean).join('\n') });
+      }
+      messages.push({ role: 'system', content: system });
+      req.messages.forEach((m, i) => {
+        const last = i === req.messages.length - 1;
+        if (breakpoints && req.conversation && m.role === 'user') {
+          const parts: OpenAI.Chat.Completions.ChatCompletionContentPartText[] = [{ type: 'text', text: m.content, ...BREAKPOINT }];
+          if (last && req.turnContext) parts.push({ type: 'text', text: req.turnContext });
+          messages.push({ role: 'user', content: parts });
+        } else if (m.role === 'user') {
+          messages.push({ role: 'user', content: last && req.turnContext ? `${m.content}\n\n${req.turnContext}` : m.content });
+        } else {
+          messages.push({ role: 'assistant', content: m.content });
+        }
+      });
 
       const tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined = req.tools?.map((t) => ({
         type: 'function',
@@ -152,6 +181,8 @@ function makeProvider(flavor: Flavor): AiProvider {
             stream: true,
             stream_options: { include_usage: true },
           };
+          // Explicit-only, so the changing end of a prompt isn't paid for as a write.
+          if (breakpoints) params.prompt_cache_options = { mode: 'explicit' };
           // OpenAI's reasoning models only take max_completion_tokens; others
           // still expect max_tokens.
           if (flavor.id === 'openai') {
@@ -234,7 +265,7 @@ function makeProvider(flavor: Flavor): AiProvider {
                 content = `Error: ${err instanceof Error ? err.message : String(err)}`;
               }
             }
-            messages.push({ role: 'tool', tool_call_id: call.id, content });
+            messages.push({ role: 'tool', tool_call_id: call.id, content: breakpoints ? [{ type: 'text', text: content, ...BREAKPOINT }] : content });
           }
         }
       } catch (err) {
@@ -249,7 +280,7 @@ export const openai = makeProvider({
   name: 'OpenAI',
   secret: 'openai_api_key',
   baseUrl: 'https://api.openai.com/v1',
-  recommendedModels: { default: 'gpt-6.1-sol', budget: 'gpt-6.1-terra', others: ['gpt-6-astra'] },
+  recommendedModels: { default: 'gpt-6.1-terra', budget: 'gpt-6-luna', others: ['gpt-6.1-sol', 'gpt-6-astra'] },
 });
 
 export const deepseek = makeProvider({

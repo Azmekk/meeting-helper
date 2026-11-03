@@ -127,6 +127,29 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt: string; // ISO 8601
+  conversationId?: number | null;
+  proposal?: TaskProposal | null; // task changes the AI suggested in this answer
+}
+
+export interface ChatConversation {
+  id: number;
+  scope: AiScope;
+  ownerId: number;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// What the AI may suggest in chat. Nothing changes until the user applies it.
+export type TaskChange =
+  | { action: 'add'; text: string; owner: string | null; parentId: number | null }
+  | { action: 'split'; id: number; subtasks: { text: string; owner: string | null }[] }
+  | { action: 'update'; id: number; text: string | null; owner: string | null }
+  | { action: 'complete'; id: number };
+
+export interface TaskProposal {
+  changes: TaskChange[];
+  state: 'pending' | 'applied' | 'dismissed';
 }
 
 // ---------- Folder AI (progress tracking, extraction) ----------
@@ -146,6 +169,7 @@ export interface ActionItem {
   firstSeenMeeting: number | null;
   lastUpdateMeeting: number | null;
   sourceMs: number | null;
+  parentId?: number | null; // set on a subtask
   createdAt: string;
   updatedAt: string;
 }

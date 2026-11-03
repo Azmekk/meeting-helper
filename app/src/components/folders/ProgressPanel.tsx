@@ -1,25 +1,59 @@
 // Folder action items: tracked across meetings, updated by the reconcile step
-// after each meeting, editable by hand.
+// after each meeting, editable by hand. Shown on the folder screen and, with
+// `meetingId`, on the meeting screen, where it can follow just that meeting.
+// Completed items stay in the list until deleted by hand.
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
 import { AiModelSelect, useAiModel } from '../ai/AiModelSelect';
-import { Check, ChevronDown, Circle, Pencil, Plus, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
+import { Check, ChevronDown, Circle, MessageSquare, Pencil, Plus, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Badge, Button, Callout, Card, Collapse, IconButton, Input, Select, Spinner, clsx, errorMessage, toast } from '../ui';
+import { Badge, Button, Callout, Card, Collapse, IconButton, Input, Segmented, Select, Spinner, clsx, errorMessage, toast } from '../ui';
 import { useAiKey } from '../meeting/AiPanels';
 import * as db from '../../lib/db';
 import { reconcileActionItems, runInFolderQueue, useFolderAi } from '../../lib/ai/folder';
 import { formatDate, formatTimestamp, formatUsd } from '../../lib/format';
 import type { ActionItem, ActionItemStatus, Folder, Meeting } from '../../lib/types';
 
-const STATUS_LABEL: Record<ActionItemStatus, string> = { suggested: 'Suggested', open: 'Open', done: 'Done', dropped: 'Dropped' };
+const STATUS_LABEL: Record<ActionItemStatus, string> = { suggested: 'Suggested', open: 'Open', done: 'Completed', dropped: 'Dropped' };
 
-export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: Meeting[] }) {
+// Parents with their subtasks right below them. A subtask whose parent isn't
+// shown stays in the list as a top-level row.
+function inTreeOrder(items: ActionItem[]): { item: ActionItem; depth: number }[] {
+  const ids = new Set(items.map((i) => i.id));
+  const children = new Map<number, ActionItem[]>();
+  for (const i of items) {
+    if (i.parentId != null && ids.has(i.parentId)) children.set(i.parentId, [...(children.get(i.parentId) ?? []), i]);
+  }
+  const out: { item: ActionItem; depth: number }[] = [];
+  const walk = (item: ActionItem, depth: number) => {
+    out.push({ item, depth });
+    for (const c of children.get(item.id) ?? []) walk(c, depth + 1);
+  };
+  for (const i of items) if (i.parentId == null || !ids.has(i.parentId)) walk(i, 0);
+  return out;
+}
+
+export function ProgressPanel({
+  folder,
+  meetings,
+  meetingId,
+  onSeek,
+  onAsk,
+}: {
+  folder: Folder;
+  meetings: Meeting[];
+  meetingId?: number;
+  onSeek?: (ms: number) => void; // moves the player when an item's source is this meeting
+  onAsk?: (item: ActionItem) => void;
+}) {
+  const compact = meetingId != null;
   const hasKey = useAiKey();
-  const [model, setModel] = useAiModel();
+  const [model, setModel] = useAiModel('background', 'progress');
   const autoBusy = useFolderAi((s) => s.busy[folder.id]);
+  const changes = useFolderAi((s) => s.tasks[folder.id] ?? 0);
   const [items, setItems] = useState<ActionItem[] | null>(null);
-  const [filter, setFilter] = useState<'open' | 'all'>('open');
+  const [filter, setFilter] = useState<'open' | 'all'>('all');
+  const [scope, setScope] = useState<'meeting' | 'folder'>('meeting');
   const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [running, setRunning] = useState(false);
   const [showSuggested, setShowSuggested] = useState(false);
@@ -39,6 +73,15 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
     load();
   }, [load]);
 
+  // Tasks can also change from chat, or from outside the app through MCP.
+  useEffect(() => {
+    if (changes) load();
+  }, [changes, load]);
+  useEffect(() => {
+    window.addEventListener('focus', load);
+    return () => window.removeEventListener('focus', load);
+  }, [load]);
+
   const wasBusy = useRef(autoBusy);
   useEffect(() => {
     if (wasBusy.current && !autoBusy) load();
@@ -46,15 +89,18 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
   }, [autoBusy, load]);
 
   const byId = useMemo(() => new Map(meetings.map((m) => [m.id, m])), [meetings]);
-  // Newest meeting with a transcript.
-  const latest = useMemo(() => [...meetings].reverse().find((m) => m.activeTranscriptId != null) ?? null, [meetings]);
+  // This meeting on its screen, otherwise the newest meeting with a transcript.
+  const target = useMemo(
+    () => (compact ? (byId.get(meetingId) ?? null) : ([...meetings].reverse().find((m) => m.activeTranscriptId != null) ?? null)),
+    [compact, byId, meetingId, meetings],
+  );
 
-  const updateFromLatest = async () => {
-    if (!latest) return;
+  const update = async () => {
+    if (!target) return;
     setRunning(true);
     setError(null);
     try {
-      const r = await runInFolderQueue(folder.id, () => reconcileActionItems(folder.id, latest.id, { model }));
+      const r = await runInFolderQueue(folder.id, () => reconcileActionItems(folder.id, target.id, { model }));
       toast(`Action items updated: ${r.updated} changed, ${r.added} new, ${r.suggested} suggested (${formatUsd(r.costUsd)})`, 'success');
       load();
     } catch (err) {
@@ -121,52 +167,73 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
       </div>
     );
   }
-  const tracked = items.filter((i) => i.status !== 'suggested');
-  const suggested = items.filter((i) => i.status === 'suggested');
-  const shown = filter === 'open' ? tracked.filter((i) => i.status === 'open') : tracked;
+  const fromHere = (i: ActionItem) => !compact || scope === 'folder' || i.meetingId === meetingId || i.firstSeenMeeting === meetingId || i.lastUpdateMeeting === meetingId;
+  const inScope = items.filter(fromHere);
+  // A subtask from this meeting brings its parent along, and the other way round.
+  const shownIds = new Set(inScope.map((i) => i.id));
+  const related = items.filter((i) => shownIds.has(i.id) || (i.parentId != null && shownIds.has(i.parentId)) || inScope.some((c) => c.parentId === i.id));
+  const tracked = related.filter((i) => i.status !== 'suggested');
+  const suggested = related.filter((i) => i.status === 'suggested');
+  const shown = inTreeOrder(filter === 'open' ? tracked.filter((i) => i.status === 'open') : tracked);
   const openCount = tracked.filter((i) => i.status === 'open').length;
 
   return (
     <Card
       title="Progress"
-      description={autoBusy ?? 'Action items across the folder. Each new meeting marks items done or dropped and adds clear commitments; anything less certain waits under Suggested.'}
+      description={
+        autoBusy ?? (compact ? undefined : 'Action items across the folder. Each new meeting marks items done or dropped and adds clear commitments; anything less certain waits under Suggested.')
+      }
       actions={
         <>
-          <AiLanguageSelect className="h-7" />
+          {!compact && <AiLanguageSelect className="h-7" />}
           <AiModelSelect value={model} onChange={setModel} disabled={running} className="h-7" />
-          <Select value={filter} onChange={(e) => setFilter(e.target.value as 'open' | 'all')} className="h-7 w-auto text-[13px]">
-            <option value="open">Open ({openCount})</option>
+          <Select value={filter} onChange={(e) => setFilter(e.target.value as 'open' | 'all')} aria-label="Which tasks to show" className="h-7 w-auto text-[13px]">
             <option value="all">All ({tracked.length})</option>
+            <option value="open">Open ({openCount})</option>
           </Select>
           <Button
             size="sm"
             icon={RefreshCw}
             loading={running}
-            disabled={!hasKey || !latest || !!autoBusy}
-            title={latest ? `Reconcile with "${latest.title}"` : 'No meeting with a transcript yet'}
-            onClick={updateFromLatest}
+            disabled={!hasKey || !target || !!autoBusy}
+            title={target ? `Reconcile with "${target.title}"` : 'No meeting with a transcript yet'}
+            onClick={update}
           >
-            Update from latest meeting
+            {compact ? 'Update from this meeting' : 'Update from latest meeting'}
           </Button>
         </>
       }
       padded={false}
     >
+      {compact && (
+        <div className="border-b border-line px-5 py-2">
+          <Segmented
+            size="sm"
+            label="Which meetings"
+            value={scope}
+            onChange={setScope}
+            options={[
+              { value: 'meeting', label: 'This meeting' },
+              { value: 'folder', label: 'Whole folder' },
+            ]}
+          />
+        </div>
+      )}
       {error && (
         <Callout tone="error" className="mx-5 mt-4">
           <p className="break-words">{error}</p>
         </Callout>
       )}
       <ul className="divide-y divide-line">
-        {shown.map((item) =>
+        {shown.map(({ item, depth }) =>
           editing === item.id ? (
             <ItemEditor key={item.id} item={item} meetings={meetings} onSave={(p) => save(item, p)} onCancel={() => setEditing(null)} />
           ) : (
-            <li key={item.id} className="group flex items-start gap-3 px-5 py-3">
+            <li key={item.id} className="group flex items-start gap-3 py-3 pr-5" style={{ paddingLeft: `${20 + depth * 24}px` }}>
               <button
                 type="button"
                 onClick={() => setStatus(item, item.status === 'open' ? 'done' : 'open')}
-                title={item.status === 'open' ? 'Mark done' : 'Reopen'}
+                title={item.status === 'open' ? 'Mark completed' : 'Reopen'}
                 className={clsx(
                   'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors',
                   item.status === 'done' ? 'border-ok bg-ok text-white' : 'border-line text-transparent hover:border-ok hover:text-ok',
@@ -181,13 +248,14 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-faint">
                   {item.status !== 'open' && <Badge tone={item.status === 'done' ? 'ok' : 'neutral'}>{STATUS_LABEL[item.status]}</Badge>}
-                  <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" />
+                  <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" here={meetingId} onSeek={onSeek} />
                   {item.lastUpdateMeeting != null && item.lastUpdateMeeting !== item.meetingId && (
-                    <MeetingLink meeting={byId.get(item.lastUpdateMeeting)} ms={null} prefix="Updated in" />
+                    <MeetingLink meeting={byId.get(item.lastUpdateMeeting)} ms={null} prefix="Updated in" here={meetingId} onSeek={onSeek} />
                   )}
                 </div>
               </div>
               <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                {onAsk && <IconButton size="sm" icon={MessageSquare} label="Ask about this" onClick={() => onAsk(item)} />}
                 {item.status === 'open' ? (
                   <IconButton size="sm" icon={Circle} label="Mark dropped" onClick={() => setStatus(item, 'dropped')} />
                 ) : (
@@ -199,11 +267,11 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
             </li>
           ),
         )}
-        {editing === 'new' && <ItemEditor item={null} meetings={meetings} onSave={(p) => save(null, p)} onCancel={() => setEditing(null)} />}
+        {editing === 'new' && <ItemEditor item={null} meetings={meetings} defaultMeeting={meetingId} onSave={(p) => save(null, p)} onCancel={() => setEditing(null)} />}
       </ul>
       {!shown.length && editing !== 'new' && (
         <p className="px-5 py-6 text-center text-[13px] text-muted">
-          {items.length ? 'Nothing open. Nice.' : 'No action items yet. They appear after a meeting in this folder gets its summary, or add one by hand.'}
+          {related.length ? 'Nothing open. Nice.' : compact && scope === 'meeting' ? 'No tasks from this meeting yet.' : 'No action items yet. They appear after a meeting in this folder gets its summary, or add one by hand.'}
         </p>
       )}
       {suggested.length > 0 && (
@@ -228,7 +296,7 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
                       {item.text}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-faint">
-                      <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" />
+                      <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" here={meetingId} onSeek={onSeek} />
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center">
@@ -250,8 +318,30 @@ export function ProgressPanel({ folder, meetings }: { folder: Folder; meetings: 
   );
 }
 
-function MeetingLink({ meeting, ms, prefix }: { meeting: Meeting | undefined; ms: number | null; prefix: string }) {
+function MeetingLink({
+  meeting,
+  ms,
+  prefix,
+  here,
+  onSeek,
+}: {
+  meeting: Meeting | undefined;
+  ms: number | null;
+  prefix: string;
+  here?: number;
+  onSeek?: (ms: number) => void;
+}) {
   if (!meeting) return null;
+  // Already on this meeting: move the player instead of opening the page again.
+  if (meeting.id === here) {
+    const label = `${prefix} this meeting${ms != null ? ` · ${formatTimestamp(ms)}` : ''}`;
+    if (ms == null || !onSeek) return <span className="truncate">{label}</span>;
+    return (
+      <button type="button" onClick={() => onSeek(ms)} className="truncate hover:text-accent hover:underline">
+        {label}
+      </button>
+    );
+  }
   const to = ms != null ? `/meetings/${meeting.id}?t=${ms}` : `/meetings/${meeting.id}`;
   return (
     <Link to={to} className="truncate hover:text-accent hover:underline">
@@ -264,17 +354,19 @@ function MeetingLink({ meeting, ms, prefix }: { meeting: Meeting | undefined; ms
 function ItemEditor({
   item,
   meetings,
+  defaultMeeting,
   onSave,
   onCancel,
 }: {
   item: ActionItem | null;
   meetings: Meeting[];
+  defaultMeeting?: number;
   onSave: (p: { text: string; owner: string | null; meetingId: number | null }) => void;
   onCancel: () => void;
 }) {
   const [text, setText] = useState(item?.text ?? '');
   const [owner, setOwner] = useState(item?.owner ?? '');
-  const [meetingId, setMeetingId] = useState<number | null>(item?.meetingId ?? null);
+  const [meetingId, setMeetingId] = useState<number | null>(item ? item.meetingId : (defaultMeeting ?? null));
   const submit = () => text.trim() && onSave({ text: text.trim(), owner: owner.trim() || null, meetingId });
   return (
     <li className="flex flex-wrap items-center gap-2 bg-sunken/40 px-5 py-3">
