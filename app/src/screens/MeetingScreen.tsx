@@ -310,22 +310,6 @@ export default function MeetingScreen() {
     flashSegment(citedId);
   };
 
-  // Space toggles play/pause when not typing.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.code !== 'Space' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (isTypingTarget(e.target) || e.target instanceof HTMLMediaElement) return;
-      if (document.querySelector('[role="dialog"]')) return;
-      const el = mediaRef.current;
-      if (!el) return;
-      e.preventDefault();
-      if (el.paused) el.play().catch(() => {});
-      else el.pause();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
   // Deep link: ?t=<ms>&seg=<segmentId> (from search results).
   const tParam = searchParams.get('t');
   const segParam = searchParams.get('seg');

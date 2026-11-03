@@ -18,6 +18,7 @@
     "core:window:allow-set-skip-taskbar",
     "core:window:allow-set-effects",
     "core:window:allow-set-theme",
+    "core:window:allow-set-fullscreen",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
