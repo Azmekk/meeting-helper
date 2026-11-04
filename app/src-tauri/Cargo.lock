@@ -2765,7 +2765,7 @@ dependencies = [
 
 [[package]]
 name = "meeting-helper"
-version = "1.0.13"
+version = "1.0.14"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
