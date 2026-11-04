@@ -43,6 +43,13 @@ fn take_links(state: tauri::State<'_, PendingLinks>) -> Vec<String> {
     std::mem::take(&mut *state.0.lock().unwrap())
 }
 
+/// Whether this copy can replace itself. Dev builds and Linux .deb/.rpm installs
+/// (updated through the package manager, needing root) only get told about new versions.
+#[tauri::command]
+fn can_self_update() -> bool {
+    !cfg!(debug_assertions) && (!cfg!(target_os = "linux") || std::env::var_os("APPIMAGE").is_some())
+}
+
 pub fn run() {
     let builder = tauri::Builder::default();
     // First: a link opened while the app runs reaches this window, not a second copy.
@@ -57,6 +64,10 @@ pub fn run() {
     }));
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
     builder
         .manage(live::LiveState::default())
         .manage(remote::RemoteState::default())
@@ -105,6 +116,7 @@ pub fn run() {
             mcp_connect::mcp_test,
             mcp_connect::mcp_open_terminal,
             take_links,
+            can_self_update,
         ])
         .setup(|app| {
             // The installer registers the link scheme; this also covers portable and dev runs.

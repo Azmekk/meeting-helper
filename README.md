@@ -75,7 +75,7 @@ Get the latest build from the [**website**](https://meetinghelper.vexbyte.com/) 
 - **[OBS Studio](https://obsproject.com) 30+**, only for recording. Importing existing files works without it.
 - **An API key** for Soniox and/or ElevenLabs. Settings walks you through getting one.
 
-The app tells you if ffmpeg or OBS is missing, and when a new version is out.
+The app tells you if ffmpeg or OBS is missing. New versions download in the background and install when you choose to restart (`.deb` and `.rpm` installs get a link to the new version instead).
 
 ## First run
 
@@ -127,7 +127,7 @@ Every release is built from this repository by [GitHub Actions](https://github.c
 <details>
 <summary><b>Where do my recordings and transcripts go?</b></summary>
 
-Recordings stay in the folder you chose. Transcripts live in a local database, and the only thing that leaves your computer is the audio sent to the provider you pick for that meeting. There's no account and no telemetry; the app otherwise only goes online to check GitHub for a new release.
+Recordings stay in the folder you chose. Transcripts live in a local database, and the only thing that leaves your computer is the audio sent to the provider you pick for that meeting. There's no account and no telemetry; the app otherwise only goes online to check GitHub for a new release and download it.
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
@@ -164,6 +164,9 @@ bun run tauri dev
 ```
 
 `bun run tauri build` makes an installer for your own OS in `app/src-tauri/target/release/bundle/`.
+It also signs an update for the in-app updater, which needs the private key in the
+`TAURI_SIGNING_PRIVATE_KEY` environment variable. To build without the key, set
+`bundle.createUpdaterArtifacts` to `false` in `tauri.conf.json` first.
 
 ### Download page
 
@@ -185,8 +188,12 @@ succeeded. Until then the release stays a draft, so nobody sees it with installe
    git push origin v0.2.0
    ```
 3. That's it. In about 10 minutes the release is live, the download page links to the new
-   installers, and the app tells existing users a new version is out. If a build fails, the draft
-   stays on the Releases page: fix the problem and run the workflow again (it reuses the draft).
+   installers, and existing users' apps download the update. If a build fails, the draft stays on
+   the Releases page: fix the problem and run the workflow again (it reuses the draft).
+
+Updates are signed with the `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+repository secrets, and the app checks them against `plugins.updater.pubkey` in `tauri.conf.json`.
+Keep a backup of that key: without it, installed copies can't receive updates.
 
 ## License
 

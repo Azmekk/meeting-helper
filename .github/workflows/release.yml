@@ -133,11 +133,15 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updates the app installs itself. Not OS code signing.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           tauriScript: bun run tauri
           args: ${{ matrix.args }}
           releaseId: ${{ needs.create-release.outputs.release_id }}
+          updaterJsonPreferNsis: true
 
   publish:
     needs: [create-release, build]
@@ -157,4 +161,17 @@ jobs:
             echo "::error::Only $count of $expected installers are attached; leaving the release as a draft."
             exit 1
           fi
+          # Same for the file the in-app updater reads: every build must have added its platform.
+          url=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate --jq '.[] | select(.name == "latest.json") | .url')
+          if [ -z "$url" ]; then
+            echo "::error::latest.json isn't attached; leaving the release as a draft."
+            exit 1
+          fi
+          manifest=$(gh api "$url" -H 'Accept: application/octet-stream')
+          for platform in windows-x86_64 windows-aarch64 darwin-aarch64 darwin-x86_64 linux-x86_64 linux-aarch64; do
+            if ! jq -e --arg p "$platform" '.platforms[$p].signature | length > 0' <<<"$manifest" >/dev/null; then
+              echo "::error::latest.json has no signed $platform update; leaving the release as a draft."
+              exit 1
+            fi
+          done
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -X PATCH -F draft=false -f make_latest=true --jq .html_url
