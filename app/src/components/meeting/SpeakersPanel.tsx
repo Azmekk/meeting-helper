@@ -1,9 +1,12 @@
-import { Plus, UserPlus } from 'lucide-react';
+import { Plus, Trash2, UserPlus } from 'lucide-react';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { formatDuration } from '../../lib/format';
-import type { Segment, Speaker } from '../../lib/types';
-import { Badge, Button, Card, Input } from '../ui';
+import { speakerName, type Segment, type Speaker } from '../../lib/types';
+import { Badge, Button, Card, IconButton, Input, Modal, Select } from '../ui';
 import { SpeakerAvatar } from './shared';
+
+// The Select's value for leaving the lines with no speaker.
+const NO_SPEAKER = '';
 
 export function SpeakersPanel({
   speakers,
@@ -12,6 +15,7 @@ export function SpeakersPanel({
   knownNames,
   onRename,
   onAdd,
+  onDelete,
 }: {
   speakers: Speaker[];
   segments: Segment[];
@@ -19,11 +23,14 @@ export function SpeakersPanel({
   knownNames: string[];
   onRename: (speakerId: number, name: string | null) => void;
   onAdd: (name: string) => Promise<void>;
+  onDelete: (speakerId: number, reassignTo: number | null) => void;
 }) {
   const listId = useId();
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState<Speaker | null>(null);
+  const [assignTo, setAssignTo] = useState(NO_SPEAKER);
 
   const stats = useMemo(() => {
     const m = new Map<number, { ms: number; count: number }>();
@@ -54,6 +61,25 @@ export function SpeakersPanel({
       setBusy(false);
     }
   };
+
+  // Nothing to lose without lines, so only a speaker who has some asks first.
+  const startDelete = (sp: Speaker) => {
+    if (!stats.get(sp.id)?.count) {
+      onDelete(sp.id, null);
+      return;
+    }
+    const next = speakers.find((o) => o.id !== sp.id);
+    setAssignTo(next ? String(next.id) : NO_SPEAKER);
+    setDeleting(sp);
+  };
+
+  const confirmDelete = () => {
+    if (!deleting) return;
+    onDelete(deleting.id, assignTo === NO_SPEAKER ? null : Number(assignTo));
+    setDeleting(null);
+  };
+
+  const deletingCount = deleting ? (stats.get(deleting.id)?.count ?? 0) : 0;
 
   return (
     <Card
@@ -90,6 +116,7 @@ export function SpeakersPanel({
               count={st?.count ?? 0}
               listId={listId}
               onRename={(name) => onRename(sp.id, name)}
+              onDelete={() => startDelete(sp)}
             />
           );
         })}
@@ -117,6 +144,38 @@ export function SpeakersPanel({
           </Button>
         </div>
       )}
+
+      <Modal
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title={`Delete ${deleting ? speakerName(deleting) : 'speaker'}?`}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDeleting(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" icon={Trash2} onClick={confirmDelete}>
+              Delete
+            </Button>
+          </>
+        }
+      >
+        <div className="text-sm text-muted">
+          <p className="mb-2">
+            They have {deletingCount} segment{deletingCount === 1 ? '' : 's'} in this transcript. Who should {deletingCount === 1 ? 'it' : 'they'} be assigned to?
+          </p>
+          <Select value={assignTo} onChange={(e) => setAssignTo(e.target.value)} aria-label="Assign the segments to">
+            {speakers
+              .filter((o) => o.id !== deleting?.id)
+              .map((o) => (
+                <option key={o.id} value={o.id}>
+                  {speakerName(o)}
+                </option>
+              ))}
+            <option value={NO_SPEAKER}>Unknown speaker</option>
+          </Select>
+        </div>
+      </Modal>
     </Card>
   );
 }
@@ -129,6 +188,7 @@ function SpeakerRow({
   count,
   listId,
   onRename,
+  onDelete,
 }: {
   speaker: Speaker;
   color: string;
@@ -137,6 +197,7 @@ function SpeakerRow({
   count: number;
   listId: string;
   onRename: (name: string | null) => void;
+  onDelete: () => void;
 }) {
   const [value, setValue] = useState(speaker.name ?? '');
   useEffect(() => setValue(speaker.name ?? ''), [speaker.name]);
@@ -147,7 +208,7 @@ function SpeakerRow({
   };
 
   return (
-    <li className="rounded-2xl px-3 py-2 transition-colors hover:bg-hover/50">
+    <li className="group rounded-2xl px-3 py-2 transition-colors hover:bg-hover/50">
       <div className="flex items-center gap-2.5">
         <SpeakerAvatar name={speaker.name || speaker.label} color={color} />
         <Input
@@ -167,6 +228,13 @@ function SpeakerRow({
           className="h-8 bg-transparent px-2.5 text-[14px] font-medium shadow-none"
         />
         {speaker.isSelf && <Badge tone="accent">You</Badge>}
+        <IconButton
+          size="sm"
+          icon={Trash2}
+          label={`Delete ${speakerName(speaker)}`}
+          onClick={onDelete}
+          className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        />
       </div>
       <div className="mt-0.5 flex items-center gap-2 pl-[38px] text-xs text-muted">
         <span>{formatDuration(talkMs)}</span>

@@ -222,6 +222,16 @@ export async function addSpeaker(transcriptId: number, name: string): Promise<Sp
   return { id: Number(res.lastInsertId), transcriptId, label, name: clean, isSelf: false };
 }
 
+// Their segments move to `reassignTo` (null leaves them with no speaker), so they
+// no longer point at the speaker by the time it goes.
+export async function deleteSpeaker(speakerId: number, reassignTo: number | null): Promise<void> {
+  const d = conn();
+  const rows = await d.select<{ transcript_id: number }[]>('SELECT transcript_id FROM speakers WHERE id = $1', [speakerId]);
+  await d.execute('UPDATE segments SET speaker_id = $1 WHERE speaker_id = $2', [reassignTo, speakerId]);
+  await d.execute('DELETE FROM speakers WHERE id = $1', [speakerId]);
+  if (rows[0]) await touch('transcript', rows[0].transcript_id);
+}
+
 // Distinct names the user has given speakers before, for autocomplete.
 export async function listKnownNames(): Promise<string[]> {
   const rows = await conn().select<{ name: string }[]>(

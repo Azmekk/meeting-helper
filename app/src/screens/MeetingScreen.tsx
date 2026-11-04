@@ -493,6 +493,24 @@ export default function MeetingScreen() {
     [refreshKnownNames],
   );
 
+  const deleteSpeaker = useCallback(
+    (speakerId: number, reassignTo: number | null) => {
+      mutate(
+        (d) => ({
+          ...d,
+          speakers: d.speakers.filter((s) => s.id !== speakerId),
+          segments: d.segments.map((s) => (s.speakerId === speakerId ? { ...s, speakerId: reassignTo } : s)),
+        }),
+        async () => {
+          await db.deleteSpeaker(speakerId, reassignTo);
+          refreshKnownNames();
+        },
+        "Couldn't delete the speaker",
+      );
+    },
+    [mutate, refreshKnownNames],
+  );
+
   // ---------- Meeting-level actions ----------
 
   const folders = useFolders((s) => s.folders);
@@ -906,6 +924,7 @@ export default function MeetingScreen() {
                 knownNames={knownNames}
                 onRename={renameSpeaker}
                 onAdd={addSpeaker}
+                onDelete={deleteSpeaker}
               />
             ) : (
               <Card>
