@@ -145,6 +145,7 @@ export async function summarizeMeeting(meetingId: number, opts: MeetingAiOptions
     {
       system: systemPrompt(SUMMARY_ROLE, ctx),
       context: [contextBlock(ctx)],
+      cacheKey: `meeting:${meetingId}`,
       messages: [{ role: 'user', content: 'Summarise this meeting.' }],
       maxTokens: 16000,
       model: opts.model || undefined,
@@ -262,6 +263,7 @@ export async function askMeeting(
     {
       system: [systemPrompt(CHAT_ROLE, ctx), tasks ? TASK_RULES : ''].filter(Boolean).join('\n\n'),
       context: [contextBlock(ctx)],
+      cacheKey: `meeting:${meetingId}`,
       messages: toAiMessages(history, q),
       conversation: true,
       turnContext: tasks ? taskListText(tasks) : undefined,

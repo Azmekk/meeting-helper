@@ -6,6 +6,7 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import OpenAI from 'openai';
 import type { SecretName } from '../secrets';
+import { logCacheUse } from './cacheLog';
 import {
   EMPTY_USAGE,
   addUsage,
@@ -70,6 +71,12 @@ function takesBreakpoints(flavor: Flavor, model: string): boolean {
 }
 
 const BREAKPOINT = { prompt_cache_breakpoint: { mode: 'explicit' } } as const;
+
+// False when the response had no cache numbers, so toUsage's 0 is only a default.
+function reportsCache(u: OpenAI.CompletionUsage | undefined | null): boolean {
+  const raw = u as (OpenAI.CompletionUsage & { prompt_cache_hit_tokens?: number }) | undefined | null;
+  return raw?.prompt_tokens_details?.cached_tokens != null || raw?.prompt_cache_hit_tokens != null;
+}
 
 function toStop(reason: string | null | undefined): AiStopReason {
   switch (reason) {
@@ -187,6 +194,8 @@ function makeProvider(flavor: Flavor): AiProvider {
           };
           // Explicit-only, so the changing end of a prompt isn't paid for as a write.
           if (breakpoints) params.prompt_cache_options = { mode: 'explicit' };
+          // Only earlier models route by the key; later ones do it on their own.
+          else if (flavor.id === 'openai' && req.cacheKey) params.prompt_cache_key = req.cacheKey;
           // OpenAI's reasoning models only take max_completion_tokens; others
           // still expect max_tokens.
           if (flavor.id === 'openai') {
@@ -208,6 +217,13 @@ function makeProvider(flavor: Flavor): AiProvider {
 
           usage = addUsage(usage, toUsage(completion.usage));
           handlers.onUsage?.(usage);
+          void logCacheUse({
+            model: completion.model || req.model,
+            cacheKey: req.cacheKey,
+            usage: toUsage(completion.usage),
+            reported: reportsCache(completion.usage),
+            context: req.context ?? [],
+          });
 
           const choice = completion.choices[0];
           const text = choice?.message.content ?? '';

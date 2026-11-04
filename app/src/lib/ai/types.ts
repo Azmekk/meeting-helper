@@ -53,6 +53,9 @@ export interface AiRequest {
   // question and isn't saved in the history, so it can change without breaking
   // the cached history.
   turnContext?: string;
+  // What the request reads ("meeting:12"), so requests over the same material
+  // stay grouped. OpenAI routes by it before GPT-5.6; the cache log records it.
+  cacheKey?: string;
   maxTokens?: number;
   effort?: AiEffort;
   tools?: AiTool[];

@@ -152,6 +152,7 @@ export async function rebuildFolderSummary(folderId: number, opts: FolderAiOptio
     {
       system: systemFor(FOLDER_SUMMARY_ROLE, folder),
       context: [`Folder: ${folder.name}\n\nMeeting summaries, oldest first:\n\n${parts.join('\n\n')}`],
+      cacheKey: `folder:${folderId}`,
       messages: [{ role: 'user', content: 'Write the folder summary from these meetings.' }],
       maxTokens: 8000,
       model: opts.model || undefined,
@@ -258,6 +259,7 @@ export async function reconcileActionItems(folderId: number, meetingId: number, 
   const result = await runAi('background', {
     system: [RECONCILE_ROLE, languageInstruction(getSettings().aiOutputLanguage), briefingText(ctx.meeting, folder)].filter(Boolean).join('\n\n'),
     context: [contextBlock(ctx)],
+    cacheKey: `meeting:${meetingId}`,
     messages: [
       {
         role: 'user',
@@ -343,6 +345,7 @@ export async function extractMeeting(templateId: number, meetingId: number, opts
   const result = await runAi('background', {
     system: [EXTRACT_ROLE, languageInstruction(getSettings().aiOutputLanguage), briefingText(ctx.meeting, ctx.folder)].filter(Boolean).join('\n\n'),
     context: [contextBlock(ctx)],
+    cacheKey: `meeting:${meetingId}`,
     messages: [
       {
         role: 'user',
@@ -546,6 +549,7 @@ export async function askFolder(
     {
       system: [FOLDER_CHAT_ROLE, TASK_RULES, languageInstruction(getSettings().aiOutputLanguage), folderBriefing(folder)].filter(Boolean).join('\n\n'),
       context: [await folderChatContext(folder)],
+      cacheKey: `folder:${folderId}`,
       messages: toAiMessages(history, q),
       conversation: true,
       turnContext: taskListText(tasks),
