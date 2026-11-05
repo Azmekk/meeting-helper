@@ -82,7 +82,10 @@ export function parseProposal(answer: string, items: ActionItem[]): TaskProposal
 
 // One line per change, for the card in chat.
 export function describeChange(change: TaskChange, items: ActionItem[]): { title: string; lines: string[] } {
-  const name = (id: number) => items.find((i) => i.id === id)?.text ?? `Task ${id}`;
+  const name = (id: number) => {
+    const item = items.find((i) => i.id === id);
+    return item ? `#${id} ${item.text}` : `Task ${id}`;
+  };
   const who = (owner: string | null) => (owner ? `${owner}: ` : '');
   switch (change.action) {
     case 'add':

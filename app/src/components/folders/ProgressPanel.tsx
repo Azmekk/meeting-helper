@@ -247,6 +247,7 @@ export function ProgressPanel({
                   {item.text}
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-faint">
+                  <TaskId id={item.id} />
                   {item.status !== 'open' && <Badge tone={item.status === 'done' ? 'ok' : 'neutral'}>{STATUS_LABEL[item.status]}</Badge>}
                   <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" here={meetingId} onSeek={onSeek} />
                   {item.lastUpdateMeeting != null && item.lastUpdateMeeting !== item.meetingId && (
@@ -296,6 +297,7 @@ export function ProgressPanel({
                       {item.text}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-faint">
+                      <TaskId id={item.id} />
                       <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" here={meetingId} onSeek={onSeek} />
                     </div>
                   </div>
@@ -316,6 +318,11 @@ export function ProgressPanel({
       </div>
     </Card>
   );
+}
+
+// The number AI agents use when they mention a task.
+function TaskId({ id }: { id: number }) {
+  return <span className="shrink-0 tabular-nums">#{id}</span>;
 }
 
 function MeetingLink({
