@@ -163,7 +163,7 @@ export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: M
         <EmptyState
           icon={Table2}
           title="Pull the same facts out of every meeting"
-          description="Define fields (e.g. budget, next deadline, client mood) and the AI fills them in for each meeting. New meetings in this folder are filled in automatically."
+          description="Define fields (e.g. budget, next deadline, client mood) and the AI fills them in for each meeting, whenever you run it."
           action={
             <Button variant="primary" icon={Plus} onClick={() => setEditing('new')}>
               New template
@@ -196,7 +196,7 @@ export function ExtractPanel({ folder, meetings }: { folder: Folder; meetings: M
       description={
         busy
           ? `Extracting ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
-          : (autoBusy ?? `${rows.length} of ${withTranscript.length} meetings filled in. New meetings are filled in after their summary.`)
+          : (autoBusy ?? `${rows.length} of ${withTranscript.length} meetings filled in.`)
       }
       actions={
         busy ? (

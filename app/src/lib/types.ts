@@ -148,9 +148,9 @@ export interface ChatConversation {
 
 // What the AI may suggest in chat. Nothing changes until the user applies it.
 export type TaskChange =
-  | { action: 'add'; text: string; owner: string | null; parentId: number | null }
+  | { action: 'add'; text: string; owner: string | null; parentId: number | null; description?: string | null }
   | { action: 'split'; id: number; subtasks: { text: string; owner: string | null }[] }
-  | { action: 'update'; id: number; text: string | null; owner: string | null }
+  | { action: 'update'; id: number; text: string | null; owner: string | null; description?: string | null }
   | { action: 'complete'; id: number };
 
 export interface TaskProposal {
@@ -170,6 +170,7 @@ export interface ActionItem {
   folderId: number | null;
   meetingId: number | null;
   text: string;
+  description?: string | null; // what was said and the details around the task
   owner: string | null;
   status: ActionItemStatus;
   firstSeenMeeting: number | null;

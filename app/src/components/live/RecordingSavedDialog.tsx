@@ -1,8 +1,11 @@
-// Shown after every OBS recording: recordings are never transcribed or
-// summarised automatically, so this asks (with the cost) what to run.
+// Shown after every OBS recording: recordings are never transcribed, summarised
+// or folded into their folder automatically, so this asks (with the cost) what
+// to run. Everything that reads the transcript uses one model and runs in turn,
+// so only the first step pays for the whole transcript.
 import { Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { effectiveModel } from '../../lib/ai';
+import { STEP_OUTPUT_TOKENS, folderSummaryCost, transcriptStepCost, updateFolderFromMeeting } from '../../lib/ai/folder';
 import { startSummary, useSummaryJobs } from '../../lib/ai/meeting';
 import * as db from '../../lib/db';
 import { formatDuration } from '../../lib/format';
@@ -11,7 +14,7 @@ import { dismissProcessing, useRecorder, type ProcessingOffer } from '../../lib/
 import { emitMeetingChanged, onMeetingChanged, transcribeMeeting } from '../../lib/pipeline';
 import { getProvider } from '../../lib/providers';
 import { useSettings } from '../../lib/settings';
-import type { Meeting } from '../../lib/types';
+import type { Folder, Meeting } from '../../lib/types';
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
 import { deleteMeeting } from '../meeting/actions';
 import { Button, Modal, Select, Spinner, Switch, errorMessage, toast } from '../ui';
@@ -23,11 +26,16 @@ export function RecordingSavedDialog() {
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [transcribe, setTranscribe] = useState(true);
   const [summarize, setSummarize] = useState(true);
+  const [folder, setFolder] = useState<Folder | null>(null);
+  const [templates, setTemplates] = useState(0);
+  const [folderSummary, setFolderSummary] = useState(settings.folderAiPreselect);
+  const [tasks, setTasks] = useState(settings.folderAiPreselect);
+  const [extraction, setExtraction] = useState(settings.folderAiPreselect);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  // The summary model for this meeting only; the setting stays as it is.
+  // The model for this meeting only; the setting stays as it is.
   const modelOptions = useLive((s) => s.modelOptions);
-  const [summaryModel, setSummaryModel] = useState(() => effectiveModel('summary'));
+  const [aiModel, setAiModel] = useState(() => effectiveModel('summary'));
   // Kept while the modal fades out after the offer is gone.
   const [shown, setShown] = useState<ProcessingOffer | null>(null);
   if (offer && offer !== shown) setShown(offer);
@@ -38,8 +46,11 @@ export function RecordingSavedDialog() {
     setMeeting(null);
     setTranscribe(true);
     setSummarize(true);
+    setFolderSummary(settings.folderAiPreselect);
+    setTasks(settings.folderAiPreselect);
+    setExtraction(settings.folderAiPreselect);
     setConfirmDelete(false);
-    setSummaryModel(effectiveModel('summary'));
+    setAiModel(effectiveModel('summary'));
     // A live meeting is offered while the recording is still being imported
     // (remuxed); transcription needs the final media file.
     let alive = true;
@@ -56,7 +67,24 @@ export function RecordingSavedDialog() {
       alive = false;
       off();
     };
-  }, [meetingId]);
+    // Only a new offer resets the choices.
+  }, [meetingId, settings.folderAiPreselect]);
+
+  const folderId = meeting?.folderId ?? null;
+  useEffect(() => {
+    setFolder(null);
+    setTemplates(0);
+    if (folderId == null) return;
+    let alive = true;
+    void Promise.all([db.getFolder(folderId), db.listExtractionTemplates(folderId)]).then(([f, list]) => {
+      if (!alive) return;
+      setFolder(f);
+      setTemplates(list.length);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [folderId]);
 
   const view = offer ?? shown;
   if (!view) return null;
@@ -71,21 +99,40 @@ export function RecordingSavedDialog() {
   // Without any transcript there's nothing to summarise.
   const canSummarize = view.live || transcribe;
   const title = meeting?.title ?? 'The meeting';
+  const summaryOn = summarize && canSummarize;
+  const folderSummaryOn = !!folder && summaryOn && folderSummary;
+  const tasksOn = !!folder && canSummarize && tasks;
+  const extractionOn = !!folder && canSummarize && templates > 0 && extraction;
+  const anyAi = summaryOn || folderSummaryOn || tasksOn || extractionOn;
+
+  // The first step to read the transcript pays for it; the ones after read it cached.
+  const stepCost = (output: number, cached: boolean) => transcriptStepCost(aiModel, durationMs, output, cached);
+  const summaryCost = stepCost(STEP_OUTPUT_TOKENS.summary, false);
+  const tasksCost = stepCost(STEP_OUTPUT_TOKENS.tasks, summaryOn);
+  const extractionCached = summaryOn || tasksOn;
+  const firstExtraction = stepCost(STEP_OUTPUT_TOKENS.extraction, extractionCached);
+  const nextExtraction = stepCost(STEP_OUTPUT_TOKENS.extraction, true);
+  const extractionCost = firstExtraction == null || nextExtraction == null ? null : firstExtraction + nextExtraction * (templates - 1);
 
   function go() {
     const id = view!.meetingId;
-    const model = summaryModel;
-    const summary = summarize && canSummarize;
+    const model = aiModel;
+    const summary = summaryOn;
+    const steps = { folderSummary: folderSummaryOn, tasks: tasksOn, extraction: extractionOn, model };
     close();
+    const runAi = async () => {
+      // A failed or stopped summary leaves nothing to build the folder summary on.
+      if (summary && !(await runSummary(id, model))) return;
+      await updateFolderFromMeeting(id, steps);
+    };
     if (transcribe) {
-      // Summarise after the full transcript replaces the live one.
+      // Run the AI after the full transcript replaces the live one.
       void transcribeMeeting(id).then(async () => {
-        if (!summary) return;
-        // Don't summarise a failed transcription.
-        if ((await db.getMeeting(id))?.status === 'ready') await runSummary(id, model);
+        // Don't run it on a failed transcription.
+        if ((await db.getMeeting(id))?.status === 'ready') await runAi();
       });
-    } else if (summary) {
-      void runSummary(id, model);
+    } else {
+      void runAi();
     }
   }
 
@@ -130,7 +177,7 @@ export function RecordingSavedDialog() {
             <Button
               variant="primary"
               onClick={go}
-              disabled={!ready || (!transcribe && !(summarize && canSummarize))}
+              disabled={!ready || (!transcribe && !anyAi)}
             >
               {!ready && !failed ? 'Preparing the recording…' : 'Start'}
             </Button>
@@ -187,20 +234,42 @@ export function RecordingSavedDialog() {
                       ? '(after the full transcription)'
                       : '(after transcription)'
                     : '(from the live transcript)'}
+                {canSummarize && ` ${costLabel(summaryCost)}`}
               </span>
             </span>
-            <Switch checked={summarize && canSummarize} onChange={setSummarize} disabled={!canSummarize} label="Generate summary" />
+            <Switch checked={summaryOn} onChange={setSummarize} disabled={!canSummarize} label="Generate summary" />
           </label>
-          {summarize && canSummarize && (
+          {folder && canSummarize && (
+            <div className="space-y-3 border-t border-line pt-3">
+              <div className="text-xs font-medium text-muted">In “{folder.name}”</div>
+              <FolderToggle
+                label="Update the folder summary"
+                hint={summaryOn ? costLabel(folderSummaryCost()) : 'needs the meeting summary'}
+                checked={folderSummaryOn}
+                onChange={setFolderSummary}
+                disabled={!summaryOn}
+              />
+              <FolderToggle label="Update tasks" hint={stepHint(tasksCost, summaryOn)} checked={tasksOn} onChange={setTasks} />
+              {templates > 0 && (
+                <FolderToggle
+                  label={templates === 1 ? 'Fill in the extraction table' : `Fill in ${templates} extraction tables`}
+                  hint={stepHint(extractionCost, extractionCached)}
+                  checked={extractionOn}
+                  onChange={setExtraction}
+                />
+              )}
+            </div>
+          )}
+          {anyAi && canSummarize && (
             <div className="flex flex-wrap items-center gap-2 pl-0.5">
-              <span className="text-muted">Summary by</span>
+              <span className="text-muted">AI model</span>
               <Select
-                aria-label="Summary model"
-                value={summaryModel}
-                onChange={(e) => setSummaryModel(e.target.value)}
+                aria-label="AI model"
+                value={aiModel}
+                onChange={(e) => setAiModel(e.target.value)}
                 className="h-[30px] w-auto max-w-64 text-[12.5px]"
               >
-                {[...new Set([summaryModel, ...modelOptions])].filter(Boolean).map((m) => (
+                {[...new Set([aiModel, ...modelOptions])].filter(Boolean).map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
@@ -225,10 +294,38 @@ export function RecordingSavedDialog() {
   );
 }
 
+function stepHint(cost: number | null, cached: boolean): string {
+  return cached ? `${costLabel(cost)}, reuses the cached transcript` : costLabel(cost);
+}
+
+function FolderToggle({
+  label,
+  hint,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-4">
+      <span className={disabled ? 'text-muted' : undefined}>
+        {label} <span className="text-muted">({hint})</span>
+      </span>
+      <Switch checked={checked} onChange={onChange} disabled={disabled} label={label} />
+    </label>
+  );
+}
+
 // Through the shared job, so the meeting page shows it running.
 async function runSummary(meetingId: number, model: string) {
   const doc = await startSummary(meetingId, { model });
   const error = useSummaryJobs.getState()[meetingId]?.error;
   if (doc) toast('Summary ready.', 'success');
   else if (error) toast(`Couldn't summarise: ${error}`, 'error');
+  return doc;
 }

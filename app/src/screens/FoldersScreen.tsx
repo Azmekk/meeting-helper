@@ -21,6 +21,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ExtractPanel } from '../components/folders/ExtractPanel';
+import { FolderFreshnessNote } from '../components/folders/FolderFreshnessNote';
 import { FolderChatPanel, FolderContextCard, FolderSummaryPanel } from '../components/folders/FolderAiPanels';
 import { ProgressPanel } from '../components/folders/ProgressPanel';
 import { pickAndImportRecording } from '../components/meeting/actions';
@@ -294,6 +295,8 @@ function FolderDetail({ folder, onDeleted }: { folder: Folder; onDeleted: () => 
           </Button>
         </div>
       </div>
+
+      <FolderFreshnessNote folder={folder} meetings={meetings} />
 
       {/* One panel at a time instead of a long stack of cards. */}
       <Segmented

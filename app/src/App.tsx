@@ -17,7 +17,6 @@ import { initRecorder, useRecorder } from './lib/obs';
 import { failInterruptedJobs, initJobCloseGuard, useJobs } from './lib/pipeline';
 import { useSettings } from './lib/settings';
 import { initUpdateCheck } from './lib/updates';
-import { initFolderAi } from './lib/ai/folder';
 import { initSidecars } from './lib/bundle';
 import { initBackup } from './lib/backup';
 import { initAppearance } from './lib/appearance';
@@ -63,7 +62,6 @@ export default function App() {
         initRemote();
         initUpdateCheck();
         initSidecars();
-        initFolderAi();
         initBackup();
         setBoot('ready');
       } catch (err) {

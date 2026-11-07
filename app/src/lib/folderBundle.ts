@@ -41,6 +41,7 @@ export interface FolderBundle {
     key?: number; // links subtasks to their parent within this bundle
     parentKey?: number | null;
     text: string;
+    description?: string | null; // missing in bundles from older versions
     owner: string | null;
     status: ActionItemStatus;
     firstSeenMeeting: string | null;
@@ -105,6 +106,7 @@ export async function buildFolderBundle(folderId: number): Promise<FolderBundle>
       key: a.id,
       parentKey: a.parentId ?? null,
       text: a.text,
+      description: a.description ?? null,
       owner: a.owner,
       status: a.status,
       firstSeenMeeting: await uidOf(a.firstSeenMeeting),
@@ -229,6 +231,7 @@ export async function finishFolderBundles(prepared: PreparedFolder[]): Promise<n
         folderId,
         meetingId: null,
         text: a.text,
+        description: a.description ?? null,
         owner: a.owner,
         status: a.status,
         firstSeenMeeting: await localId(a.firstSeenMeeting),

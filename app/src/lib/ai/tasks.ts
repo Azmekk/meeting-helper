@@ -11,7 +11,7 @@ import type { ActionItem, TaskChange, TaskProposal } from '../types';
 export const TASK_RULES = `The user tracks tasks for this series of meetings. The current tasks come after their question.
 Use them when asked about a task. When the user asks you to create, split, reword or complete tasks, describe the change in a sentence, then end your answer with one block like this, and use it only then:
 \`\`\`tasks
-{"changes":[{"action":"add","text":"Short task","owner":null,"parent_id":null},{"action":"split","id":12,"subtasks":[{"text":"First step","owner":"Maria"}]},{"action":"update","id":12,"text":"New wording","owner":null},{"action":"complete","id":12}]}
+{"changes":[{"action":"add","text":"Short task","description":"A few sentences on what was said and the details.","owner":null,"parent_id":null},{"action":"split","id":12,"subtasks":[{"text":"First step","owner":"Maria"}]},{"action":"update","id":12,"text":"New wording","description":null,"owner":null},{"action":"complete","id":12}]}
 \`\`\`
 Include only the changes asked for. Use ids from the task list, and null for anything unknown or unchanged. These are only suggestions: the user reviews them before anything changes, so never say a change has been made.`;
 
@@ -45,7 +45,7 @@ function toChange(raw: Record<string, unknown>, known: Set<number>): TaskChange 
     case 'add': {
       const t = text(raw.text);
       const parent = Number(raw.parent_id);
-      return t ? { action: 'add', text: t, owner: text(raw.owner), parentId: known.has(parent) ? parent : null } : null;
+      return t ? { action: 'add', text: t, description: text(raw.description), owner: text(raw.owner), parentId: known.has(parent) ? parent : null } : null;
     }
     case 'split': {
       if (!known.has(id) || !Array.isArray(raw.subtasks)) return null;
@@ -58,7 +58,8 @@ function toChange(raw: Record<string, unknown>, known: Set<number>): TaskChange 
     case 'update': {
       const t = text(raw.text);
       const owner = text(raw.owner);
-      return known.has(id) && (t || owner) ? { action: 'update', id, text: t, owner } : null;
+      const description = text(raw.description);
+      return known.has(id) && (t || owner || description) ? { action: 'update', id, text: t, owner, description } : null;
     }
     case 'complete':
       return known.has(id) ? { action: 'complete', id } : null;
@@ -89,11 +90,14 @@ export function describeChange(change: TaskChange, items: ActionItem[]): { title
   const who = (owner: string | null) => (owner ? `${owner}: ` : '');
   switch (change.action) {
     case 'add':
-      return { title: `Add: ${who(change.owner)}${change.text}`, lines: change.parentId != null ? [`Under: ${name(change.parentId)}`] : [] };
+      return {
+        title: `Add: ${who(change.owner)}${change.text}`,
+        lines: [change.parentId != null && `Under: ${name(change.parentId)}`, change.description].filter((l): l is string => !!l),
+      };
     case 'split':
       return { title: `Split: ${name(change.id)}`, lines: change.subtasks.map((s) => `${who(s.owner)}${s.text}`) };
     case 'update':
-      return { title: `Change: ${name(change.id)}`, lines: [[change.owner && `Owner: ${change.owner}`, change.text && `Text: ${change.text}`].filter(Boolean).join(' · ')] };
+      return { title: `Change: ${name(change.id)}`, lines: [[change.owner && `Owner: ${change.owner}`, change.text && `Text: ${change.text}`, change.description && `Description: ${change.description}`].filter(Boolean).join(' · ')] };
     case 'complete':
       return { title: `Complete: ${name(change.id)}`, lines: [] };
   }
@@ -101,12 +105,12 @@ export function describeChange(change: TaskChange, items: ActionItem[]): { title
 
 // Applied tasks count as added by hand: re-running action items leaves them alone.
 export async function applyProposal(folderId: number, meetingId: number | null, changes: TaskChange[]): Promise<void> {
-  const add = (text: string, owner: string | null, parentId: number | null) =>
-    db.addActionItem({ folderId, meetingId, text, owner, status: 'open', firstSeenMeeting: null, lastUpdateMeeting: null, sourceMs: null, parentId });
+  const add = (text: string, owner: string | null, parentId: number | null, description: string | null = null) =>
+    db.addActionItem({ folderId, meetingId, text, description, owner, status: 'open', firstSeenMeeting: null, lastUpdateMeeting: null, sourceMs: null, parentId });
   for (const c of changes) {
-    if (c.action === 'add') await add(c.text, c.owner, c.parentId);
+    if (c.action === 'add') await add(c.text, c.owner, c.parentId, c.description ?? null);
     else if (c.action === 'split') for (const s of c.subtasks) await add(s.text, s.owner, c.id);
-    else if (c.action === 'update') await db.updateActionItem(c.id, { ...(c.text ? { text: c.text } : {}), ...(c.owner ? { owner: c.owner } : {}) });
+    else if (c.action === 'update') await db.updateActionItem(c.id, { ...(c.text ? { text: c.text } : {}), ...(c.owner ? { owner: c.owner } : {}), ...(c.description ? { description: c.description } : {}) });
     else await db.updateActionItem(c.id, { status: 'done' });
   }
 }

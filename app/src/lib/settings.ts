@@ -66,9 +66,9 @@ export interface Settings {
   mcpAllowWrites: boolean;
   // Folders. '' = no base folder: meetings aren't kept in their own directories.
   baseFolder: string;
-  // After a meeting in a folder gets its summary, update the folder summary,
-  // action items and extraction tables in the background.
-  folderAiAuto: boolean;
+  // Whether the "Recording saved" dialog starts with the folder summary, action
+  // items and extraction tables switched on. They only ever run when chosen there.
+  folderAiPreselect: boolean;
   // Cloud backup (S3/R2-compatible). Keys are in the keyring (secrets.ts).
   backupEndpoint: string;
   backupRegion: string; // 'auto' for R2
@@ -129,7 +129,7 @@ export const DEFAULT_SETTINGS: Settings = {
   settingsVersion: 1,
   mcpAllowWrites: true,
   baseFolder: '',
-  folderAiAuto: true,
+  folderAiPreselect: false,
   backupEndpoint: '',
   backupRegion: 'auto',
   backupBucket: '',

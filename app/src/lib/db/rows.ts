@@ -182,6 +182,7 @@ export interface ActionItemRow {
   folder_id: number | null;
   meeting_id: number | null;
   text: string;
+  description: string | null;
   owner: string | null;
   status: ActionItemStatus;
   first_seen_meeting: number | null;
@@ -197,6 +198,7 @@ export const toActionItem = (r: ActionItemRow): ActionItem => ({
   folderId: r.folder_id,
   meetingId: r.meeting_id,
   text: r.text,
+  description: r.description,
   owner: r.owner,
   status: r.status,
   firstSeenMeeting: r.first_seen_meeting,

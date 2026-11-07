@@ -9,7 +9,7 @@ import { formatDate, formatDuration, formatTimestamp } from '../format';
 import { getSettings } from '../settings';
 import { type ItemEvidence, normalizeForQuote, triageItem } from './triage';
 import type { ActionItem, ActionItemStatus, AiDoc, ChatMessage, ExtractionTemplate, Folder, Meeting } from '../types';
-import { effectiveModel, estimateCost, runAi, type AiResult, type AiTool, type AiToolCall } from './index';
+import { effectiveModel, estimateCallCost, estimateCost, runAi, type AiResult, type AiTool, type AiToolCall } from './index';
 import {
   answerUsage,
   briefingText,
@@ -17,7 +17,6 @@ import {
   contextBlock,
   isAbortError,
   loadMeetingContext,
-  onMeetingSummarized,
   toAiMessages,
   truncationNote,
   type CacheStatus,
@@ -57,7 +56,7 @@ const FOLDER_CITATIONS =
 // ---------- Bookkeeping ----------
 
 // Which meetings have been folded into the summary / reconciled into the
-// action items, so automatic updates don't process one twice.
+// action items, so the folder can say what it's behind on.
 interface FolderState {
   summaryMeetings: number[];
   progressMeetings: number[];
@@ -76,6 +75,7 @@ export async function getFolderState(folderId: number): Promise<FolderState> {
 async function updateFolderState(folderId: number, fn: (s: FolderState) => FolderState): Promise<void> {
   const next = fn(await getFolderState(folderId));
   await db.saveAiDoc({ scope: 'folder', ownerId: folderId, kind: 'folder_state', content: JSON.stringify(next), model: null, costUsd: null });
+  folderChanged(folderId);
 }
 
 const addId = (ids: number[], id: number) => (ids.includes(id) ? ids : [...ids, id]);
@@ -181,11 +181,12 @@ async function saveFolderSummary(folderId: number, result: AiResult, state: (s: 
 // ---------- Progress (action items) ----------
 
 const RECONCILE_ROLE = `You track action items across a series of meetings. You get the currently open items and one new meeting (summary and transcript).
-- For each open item the new meeting says something about, return an update: "done" when it was completed, "dropped" when it was cancelled or is no longer relevant, "open" when it is still pending but its wording or owner should change. Give the new text/owner, or null to keep them. Leave items the meeting doesn't mention out of "updates".
+- For each open item the new meeting says something about, return an update: "done" when it was completed, "dropped" when it was cancelled or is no longer relevant, "open" when it is still pending but its wording, owner or description should change. Give the new text/owner/description, or null to keep them. A new description keeps what still holds from the old one. Leave items the meeting doesn't mention out of "updates".
 - Report anything new from the meeting that someone may need to act on as new_items, with the owner when the transcript makes it clear and the id of the transcript line where it came up. Don't judge importance, but leave out topics that were only discussed. Merge steps of the same piece of work into one item. Don't add duplicates of open items or earlier suggestions, unless the meeting turns a suggestion into a commitment.
 - Classify each new item by what was actually said. "commitment": a person clearly said they will do it. "request": someone asked a person to do it; set accepted to true only if that person agreed. "suggestion": an idea or a "we should" that nobody took on.
 - Give the words that show this as quote: copied exactly from one transcript line, in the language spoken, never translated or paraphrased.
-- Keep item texts short and concrete (a task, not a sentence about the meeting).`;
+- Item text must read at a glance: one short line starting with a verb, a task rather than a sentence about the meeting, without the owner's name.
+- Put the context in description: 2-4 sentences on what was said and the details around the task (why it's needed, dates, amounts, names, conditions). Only what the meeting says; no citations or line ids.`;
 
 const RECONCILE_SCHEMA = {
   type: 'object',
@@ -197,11 +198,12 @@ const RECONCILE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'status', 'text', 'owner'],
+        required: ['id', 'status', 'text', 'description', 'owner'],
         properties: {
           id: { type: 'integer', description: 'Id of an open item' },
           status: { type: 'string', enum: ['open', 'done', 'dropped'] },
           text: { type: ['string', 'null'], description: 'New wording, or null to keep it' },
+          description: { type: ['string', 'null'], description: 'New description, or null to keep it' },
           owner: { type: ['string', 'null'], description: 'New owner, or null to keep it' },
         },
       },
@@ -211,9 +213,10 @@ const RECONCILE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['text', 'owner', 'kind', 'accepted', 'quote', 'segment_id'],
+        required: ['text', 'description', 'owner', 'kind', 'accepted', 'quote', 'segment_id'],
         properties: {
-          text: { type: 'string' },
+          text: { type: 'string', description: 'One short line' },
+          description: { type: 'string', description: '2-4 sentences on what was said and the details' },
           owner: { type: ['string', 'null'] },
           kind: { type: 'string', enum: ['commitment', 'request', 'suggestion'] },
           accepted: { type: 'boolean', description: 'For a request: did the person asked agree? Otherwise false' },
@@ -226,8 +229,8 @@ const RECONCILE_SCHEMA = {
 } as const;
 
 interface ReconcileOutput {
-  updates: { id: number; status: ActionItemStatus; text: string | null; owner: string | null }[];
-  new_items: (ItemEvidence & { text: string; owner: string | null; segment_id: number | null })[];
+  updates: { id: number; status: ActionItemStatus; text: string | null; description: string | null; owner: string | null }[];
+  new_items: (ItemEvidence & { text: string; description: string | null; owner: string | null; segment_id: number | null })[];
 }
 
 export interface ReconcileResult {
@@ -238,7 +241,7 @@ export interface ReconcileResult {
 }
 
 function itemLine(a: ActionItem): string {
-  return `- id ${a.id}: ${a.text}${a.owner ? ` (owner: ${a.owner})` : ''}`;
+  return `- id ${a.id}: ${a.text}${a.owner ? ` (owner: ${a.owner})` : ''}${a.description ? `\n  Description: ${a.description}` : ''}`;
 }
 
 // Applies one meeting to the folder's action items.
@@ -289,8 +292,9 @@ export async function reconcileActionItems(folderId: number, meetingId: number, 
     if (!item || !['open', 'done', 'dropped'].includes(u.status)) continue;
     const text = u.text?.trim() || item.text;
     const owner = u.owner?.trim() || item.owner;
-    if (u.status === item.status && text === item.text && owner === item.owner) continue;
-    await db.updateActionItem(item.id, { status: u.status, text, owner, lastUpdateMeeting: meetingId });
+    const description = u.description?.trim() || (item.description ?? null);
+    if (u.status === item.status && text === item.text && owner === item.owner && description === (item.description ?? null)) continue;
+    await db.updateActionItem(item.id, { status: u.status, text, description, owner, lastUpdateMeeting: meetingId });
     updated++;
   }
   const startOf = new Map(ctx.detail.segments.map((s) => [s.id, s.startMs]));
@@ -305,6 +309,7 @@ export async function reconcileActionItems(folderId: number, meetingId: number, 
       folderId,
       meetingId,
       text,
+      description: n.description?.trim() || null,
       owner: n.owner?.trim() || null,
       status,
       firstSeenMeeting: meetingId,
@@ -366,6 +371,7 @@ export async function extractMeeting(templateId: number, meetingId: number, opts
     values[f.name] = v == null || v === '' ? null : String(v);
   });
   await db.saveExtractionRow(templateId, meetingId, values);
+  folderChanged(t.folderId);
   return costOf(result);
 }
 
@@ -572,14 +578,23 @@ export async function askFolder(
   return { question: saved, answer, conversationId };
 }
 
-// ---------- Automatic updates ----------
+// ---------- Updates the user asks for ----------
 
 // What's running per folder, for the folder screen. `tasks` counts changes to a
-// folder's tasks, so every open Progress panel reloads.
-export const useFolderAi = create<{ busy: Record<number, string>; tasks: Record<number, number> }>(() => ({ busy: {}, tasks: {} }));
+// folder's tasks, so every open Progress panel reloads. `updates` counts anything
+// that can change what the folder is behind on.
+export const useFolderAi = create<{ busy: Record<number, string>; tasks: Record<number, number>; updates: Record<number, number> }>(() => ({
+  busy: {},
+  tasks: {},
+  updates: {},
+}));
 
 export function tasksChanged(folderId: number): void {
   useFolderAi.setState((s) => ({ tasks: { ...s.tasks, [folderId]: (s.tasks[folderId] ?? 0) + 1 } }));
+}
+
+function folderChanged(folderId: number): void {
+  useFolderAi.setState((s) => ({ updates: { ...s.updates, [folderId]: (s.updates[folderId] ?? 0) + 1 } }));
 }
 
 function setBusy(folderId: number, message: string | null): void {
@@ -601,46 +616,172 @@ export function runInFolderQueue<T>(folderId: number, task: () => Promise<T>): P
   return next;
 }
 
-// After a meeting summary: fold it into the folder summary, reconcile action
-// items and fill extraction rows the meeting doesn't have yet.
-export function updateFolderAfterMeeting(meetingId: number): Promise<void> {
-  return (async () => {
-    const meeting = await db.getMeeting(meetingId);
-    if (meeting?.folderId == null) return;
-    const folderId = meeting.folderId;
-    await runInFolderQueue(folderId, async () => {
-      const problems: string[] = [];
-      const step = async (label: string, fn: () => Promise<unknown>) => {
-        setBusy(folderId, label);
-        try {
-          await fn();
-        } catch (err) {
-          problems.push(`${label.replace(/…$/, '')}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      };
-      const state = await getFolderState(folderId);
-      // Folding into nothing would lose the other meetings if every summary was deleted.
-      const allDeleted = state.summaryMeetings.length > 0 && !(await db.getAiDoc('folder', folderId, 'folder_summary'));
-      await step('Updating the folder summary…', () =>
-        allDeleted || state.summaryMeetings.includes(meetingId) ? rebuildFolderSummary(folderId) : updateFolderSummary(folderId, meetingId),
-      );
-      await step('Updating action items…', () => reconcileActionItems(folderId, meetingId));
-      for (const t of await db.listExtractionTemplates(folderId)) {
-        await step(`Extracting "${t.name}"…`, () => extractMeeting(t.id, meetingId));
+type FolderStep = { label: string; run: () => Promise<unknown> };
+
+// One at a time, so a step can read the transcript the one before it cached.
+// A failed step doesn't stop the others.
+function runFolderSteps(folderId: number, steps: () => Promise<FolderStep[]>): Promise<void> {
+  return runInFolderQueue(folderId, async () => {
+    const problems: string[] = [];
+    for (const step of await steps()) {
+      setBusy(folderId, step.label);
+      try {
+        await step.run();
+      } catch (err) {
+        problems.push(`${step.label.replace(/…$/, '')}: ${err instanceof Error ? err.message : String(err)}`);
       }
-      setBusy(folderId, null);
-      if (problems.length) toast(`Folder update incomplete. ${problems.join(' · ')}`, 'error');
-    });
-  })().catch((err) => console.warn('Folder update failed', err));
+    }
+    setBusy(folderId, null);
+    if (problems.length) toast(`Folder update incomplete. ${problems.join(' · ')}`, 'error');
+    else toast('Folder updated', 'success');
+  }).catch((err) => {
+    setBusy(folderId, null);
+    toast(`Folder update failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+  });
 }
 
-let started = false;
+// Folding into nothing would lose the other meetings if every summary was deleted.
+async function folderSummaryStep(folderId: number, meetingId: number): Promise<FolderStep> {
+  const state = await getFolderState(folderId);
+  const allDeleted = state.summaryMeetings.length > 0 && !(await db.getAiDoc('folder', folderId, 'folder_summary'));
+  return {
+    label: 'Updating the folder summary…',
+    run: () => (allDeleted || state.summaryMeetings.includes(meetingId) ? rebuildFolderSummary(folderId) : updateFolderSummary(folderId, meetingId)),
+  };
+}
 
-// Called once at startup.
-export function initFolderAi(): void {
-  if (started) return;
-  started = true;
-  onMeetingSummarized((meetingId) => {
-    if (getSettings().folderAiAuto) void updateFolderAfterMeeting(meetingId);
+function taskStep(folderId: number, meetingId: number, model?: string): FolderStep {
+  return { label: 'Updating action items…', run: () => reconcileActionItems(folderId, meetingId, { model }) };
+}
+
+// The choices in the "Recording saved" dialog. Tasks and extraction take the
+// summary's model because a cached transcript only serves the model that wrote
+// it; the folder summary reads summaries, not the transcript, so it stays on the
+// background model.
+export interface MeetingFolderSteps {
+  folderSummary: boolean;
+  tasks: boolean;
+  extraction: boolean;
+  model?: string;
+}
+
+export async function updateFolderFromMeeting(meetingId: number, choice: MeetingFolderSteps): Promise<void> {
+  const folderId = (await db.getMeeting(meetingId))?.folderId;
+  if (folderId == null || !(choice.folderSummary || choice.tasks || choice.extraction)) return;
+  await runFolderSteps(folderId, async () => {
+    const steps: FolderStep[] = [];
+    if (choice.folderSummary) steps.push(await folderSummaryStep(folderId, meetingId));
+    if (choice.tasks) steps.push(taskStep(folderId, meetingId, choice.model));
+    if (choice.extraction) {
+      for (const t of await db.listExtractionTemplates(folderId)) {
+        steps.push({ label: `Extracting "${t.name}"…`, run: () => extractMeeting(t.id, meetingId, { model: choice.model }) });
+      }
+    }
+    return steps;
   });
+}
+
+// ---------- What a folder is behind on ----------
+
+export interface FolderFreshness {
+  summary: {
+    last: Meeting | null; // the newest meeting it includes
+    pending: Meeting[]; // newer meetings that have a summary to fold in
+    unsummarized: Meeting[]; // newer meetings that need a summary first
+    changed: Meeting[]; // included meetings whose summary was redone afterwards
+  };
+  tasks: { last: Meeting | null; pending: Meeting[] };
+  extraction: { template: ExtractionTemplate; last: Meeting | null; pending: Meeting[] }[];
+}
+
+// Only meetings after the newest one included count: an older meeting someone
+// left out on purpose, or moved in later, isn't news.
+function afterLast(meetings: Meeting[], included: (m: Meeting) => boolean): { last: Meeting | null; pending: Meeting[] } {
+  let at = -1;
+  meetings.forEach((m, i) => {
+    if (included(m)) at = i;
+  });
+  return { last: meetings[at] ?? null, pending: meetings.slice(at + 1) };
+}
+
+export async function getFolderFreshness(folderId: number): Promise<FolderFreshness> {
+  const meetings = (await db.listFolderMeetings(folderId)).filter((m) => m.activeTranscriptId != null && m.status !== 'recording');
+  const state = await getFolderState(folderId);
+  const doc = await db.getAiDoc('folder', folderId, 'folder_summary');
+  const summaries = new Map<number, string>();
+  for (const m of meetings) {
+    const summary = await db.getAiDoc('meeting', m.id, 'summary');
+    if (summary) summaries.set(m.id, summary.createdAt);
+  }
+  const included = new Set(doc ? state.summaryMeetings : []);
+  const inSummary = afterLast(meetings, (m) => included.has(m.id));
+  const tasks = afterLast(meetings, (m) => state.progressMeetings.includes(m.id));
+
+  const extraction: FolderFreshness['extraction'] = [];
+  for (const template of await db.listExtractionTemplates(folderId)) {
+    const rows = new Set((await db.listExtractionRows(template.id)).map((r) => r.meetingId));
+    // A template that has never run says so itself in the Extract tab.
+    if (rows.size) extraction.push({ template, ...afterLast(meetings, (m) => rows.has(m.id)) });
+  }
+  return {
+    summary: {
+      last: inSummary.last,
+      pending: inSummary.pending.filter((m) => summaries.has(m.id)),
+      unsummarized: inSummary.pending.filter((m) => !summaries.has(m.id)),
+      changed: doc ? meetings.filter((m) => included.has(m.id) && (summaries.get(m.id) ?? '') > doc.createdAt) : [],
+    },
+    tasks,
+    extraction,
+  };
+}
+
+// One rebuild is cheaper than folding in several meetings, and folding can't
+// replace what a redone summary changed.
+async function summaryCatchUpSteps(folderId: number): Promise<FolderStep[]> {
+  const { summary } = await getFolderFreshness(folderId);
+  if (!summary.pending.length && !summary.changed.length) return [];
+  if (summary.pending.length === 1 && !summary.changed.length) return [await folderSummaryStep(folderId, summary.pending[0].id)];
+  return [{ label: 'Updating the folder summary…', run: () => rebuildFolderSummary(folderId) }];
+}
+
+function extractionSteps(template: ExtractionTemplate, meetings: Meeting[], model?: string): FolderStep[] {
+  return meetings.map((m) => ({ label: `Extracting "${template.name}"…`, run: () => extractMeeting(template.id, m.id, { model }) }));
+}
+
+export function catchUpFolderSummary(folderId: number): Promise<void> {
+  return runFolderSteps(folderId, () => summaryCatchUpSteps(folderId));
+}
+
+export function catchUpTasks(folderId: number, meetings: Meeting[], model?: string): Promise<void> {
+  return runFolderSteps(folderId, async () => meetings.map((m) => taskStep(folderId, m.id, model)));
+}
+
+export function catchUpExtraction(folderId: number, template: ExtractionTemplate, meetings: Meeting[], model?: string): Promise<void> {
+  return runFolderSteps(folderId, async () => extractionSteps(template, meetings, model));
+}
+
+export function catchUpFolder(folderId: number, fresh: FolderFreshness, model?: string): Promise<void> {
+  return runFolderSteps(folderId, async () => [
+    ...(await summaryCatchUpSteps(folderId)),
+    ...fresh.tasks.pending.map((m) => taskStep(folderId, m.id, model)),
+    ...fresh.extraction.flatMap((e) => extractionSteps(e.template, e.pending, model)),
+  ]);
+}
+
+// ---------- Cost estimates ----------
+
+// Speech runs about 150 words a minute; the line prefixes add some on top.
+const TRANSCRIPT_TOKENS_PER_MINUTE = 230;
+const FOLDER_SUMMARY_TOKENS = 2500; // the folder summary plus a meeting's summary
+
+export const STEP_OUTPUT_TOKENS = { summary: 1500, tasks: 1500, extraction: 300 } as const;
+
+// `cached`: an earlier step with the same model already paid for the transcript.
+export function transcriptStepCost(model: string, durationMs: number | null | undefined, outputTokens: number, cached: boolean): number | null {
+  if (!durationMs) return null;
+  return estimateCallCost(model, Math.round((durationMs / 60_000) * TRANSCRIPT_TOKENS_PER_MINUTE), outputTokens, cached);
+}
+
+export function folderSummaryCost(): number | null {
+  return estimateCallCost(effectiveModel('background'), FOLDER_SUMMARY_TOKENS, 1200, false);
 }

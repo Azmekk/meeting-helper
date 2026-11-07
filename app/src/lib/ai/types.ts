@@ -66,7 +66,9 @@ export interface AiRequest {
   runTool?: (call: AiToolCall) => Promise<string>;
   maxToolRounds?: number; // default 8
   // Ask for a JSON object matching this schema; the parsed value lands in
-  // AiResult.json. The schema should have additionalProperties: false.
+  // AiResult.json. The schema should have additionalProperties: false. It goes
+  // in the prompt after the context: a schema parameter would change the cached
+  // prefix, so these calls couldn't read the transcript a summary just cached.
   json?: { name: string; schema: Record<string, unknown> };
   signal?: AbortSignal;
 }
@@ -121,11 +123,15 @@ export function addUsage(a: AiUsage, b: AiUsage): AiUsage {
   };
 }
 
-// Model output for JSON mode sometimes comes wrapped in a ```json fence.
+export function jsonInstruction(schema: Record<string, unknown>): string {
+  return `Reply with a single JSON object matching this JSON schema, and nothing else:\n${JSON.stringify(schema)}`;
+}
+
+// The object in a JSON reply, which sometimes comes in a ```json fence or with a
+// sentence around it.
 export function parseJsonText(text: string): unknown {
-  const t = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   try {
-    return JSON.parse(t);
+    return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
   } catch {
     return undefined;
   }

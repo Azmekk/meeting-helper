@@ -62,6 +62,7 @@ export interface MeetingBundle {
     key?: number; // links subtasks to their parent within this bundle
     parentKey?: number | null;
     text: string;
+    description?: string | null; // missing in bundles from older versions
     owner: string | null;
     status: ActionItemStatus;
     firstSeenMeeting: string | null;
@@ -156,6 +157,7 @@ export async function buildBundle(meetingId: number): Promise<MeetingBundle> {
       key: a.id,
       parentKey: a.parentId ?? null,
       text: a.text,
+      description: a.description ?? null,
       owner: a.owner,
       status: a.status,
       firstSeenMeeting: await meetingUid(a.firstSeenMeeting),
@@ -401,6 +403,7 @@ export async function importBundle(
         folderId,
         meetingId,
         text: a.text,
+        description: a.description ?? null,
         owner: a.owner,
         status: a.status,
         // null = added by hand; the AI's re-runs leave those alone.

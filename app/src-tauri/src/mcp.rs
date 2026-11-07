@@ -357,7 +357,7 @@ async fn list_tasks(db: &SqlitePool, args: &Value) -> Result<String, String> {
     let folder = folder_of(db, args).await?;
     let meeting = int(args, "meeting_id");
     let rows = sqlx::query(
-        "SELECT id, parent_id, text, owner, status, meeting_id, source_ms FROM action_items
+        "SELECT id, parent_id, text, description, owner, status, meeting_id, source_ms FROM action_items
          WHERE folder_id = $1 AND ($2 IS NULL OR meeting_id = $2 OR first_seen_meeting = $2 OR last_update_meeting = $2)
          ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'suggested' THEN 1 WHEN 'done' THEN 2 ELSE 3 END, created_at, id",
     )
@@ -381,6 +381,9 @@ async fn list_tasks(db: &SqlitePool, args: &Value) -> Result<String, String> {
             }
             if let (Some(m), Some(ms)) = (r.get::<Option<i64>, _>("meeting_id"), r.get::<Option<i64>, _>("source_ms")) {
                 line.push_str(&format!(" | {}", link(m, ms, None)));
+            }
+            if let Some(description) = r.get::<Option<String>, _>("description") {
+                line.push_str(&format!("\n  {description}"));
             }
             line
         })
@@ -418,14 +421,15 @@ async fn add_task(db: &SqlitePool, args: &Value) -> Result<String, String> {
     let meeting = int(args, "meeting_id");
     // Counts as added by hand: re-running action items leaves it alone.
     let res = sqlx::query(&format!(
-        "INSERT INTO action_items (folder_id, meeting_id, text, owner, status, parent_id, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, 'open', $5, {NOW}, {NOW})"
+        "INSERT INTO action_items (folder_id, meeting_id, text, owner, status, parent_id, description, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'open', $5, $6, {NOW}, {NOW})"
     ))
     .bind(folder)
     .bind(meeting)
     .bind(task)
     .bind(text(args, "owner"))
     .bind(parent)
+    .bind(text(args, "description"))
     .execute(db)
     .await
     .map_err(|e| e.to_string())?;
@@ -443,16 +447,18 @@ async fn update_task(db: &SqlitePool, args: &Value) -> Result<String, String> {
     }
     let task = text(args, "text");
     let owner = text(args, "owner");
-    if task.is_none() && owner.is_none() && status.is_none() {
-        return Err("Nothing to change: give text, owner or status.".into());
+    let description = text(args, "description");
+    if task.is_none() && owner.is_none() && status.is_none() && description.is_none() {
+        return Err("Nothing to change: give text, owner, status or description.".into());
     }
     let row = sqlx::query(&format!(
-        "UPDATE action_items SET text = COALESCE($1, text), owner = COALESCE($2, owner), status = COALESCE($3, status), updated_at = {NOW}
-         WHERE id = $4 RETURNING folder_id, meeting_id"
+        "UPDATE action_items SET text = COALESCE($1, text), owner = COALESCE($2, owner), status = COALESCE($3, status), description = COALESCE($4, description), updated_at = {NOW}
+         WHERE id = $5 RETURNING folder_id, meeting_id"
     ))
     .bind(task)
     .bind(owner)
     .bind(status)
+    .bind(description)
     .bind(id)
     .fetch_optional(db)
     .await
@@ -518,7 +524,8 @@ fn tools() -> Value {
             "Adds a task to a folder, or a subtask with parent_id. Only when the user asks. Give folder_id or meeting_id.",
             false,
             json!({
-                "text": { "type": "string" },
+                "text": { "type": "string", "description": "One short line" },
+                "description": { "type": "string", "description": "A few sentences on what was said and the details" },
                 "owner": { "type": "string" },
                 "folder_id": id,
                 "meeting_id": id,
@@ -528,11 +535,12 @@ fn tools() -> Value {
         ));
         list.push(tool(
             "update_task",
-            "Rewords a task, changes its owner, or sets its status. Only when the user asks. Tasks can't be deleted from here.",
+            "Rewords a task, changes its description or owner, or sets its status. Only when the user asks. Tasks can't be deleted from here.",
             false,
             json!({
                 "id": id,
                 "text": { "type": "string" },
+                "description": { "type": "string" },
                 "owner": { "type": "string" },
                 "status": { "type": "string", "enum": ["open", "done", "dropped"] },
             }),

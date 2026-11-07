@@ -10,6 +10,7 @@ import { logCacheUse } from './cacheLog';
 import {
   EMPTY_USAGE,
   addUsage,
+  jsonInstruction,
   missingRequired,
   parseJsonText,
   type AiAuth,
@@ -141,13 +142,7 @@ function makeProvider(flavor: Flavor): AiProvider {
     async stream(auth, req, handlers = {}) {
       const api = client(flavor, auth);
 
-      let system = req.system;
-      // DeepSeek and most custom servers only do json_object; the schema then
-      // goes into the prompt (json_object also requires the word "JSON" in it).
-      const schemaMode = flavor.id === 'openai';
-      if (req.json && !schemaMode) {
-        system += `\n\nReply with a single JSON object matching this JSON schema, and nothing else:\n${JSON.stringify(req.json.schema)}`;
-      }
+      const system = req.json ? `${req.system}\n\n${jsonInstruction(req.json.schema)}` : req.system;
       const breakpoints = takesBreakpoints(flavor, req.model);
       const messages: Chat[] = [];
       if (breakpoints && req.context?.length) {
@@ -205,11 +200,9 @@ function makeProvider(flavor: Flavor): AiProvider {
             params.max_tokens = maxTokens;
           }
           if (tools?.length) params.tools = tools;
-          if (req.json) {
-            params.response_format = schemaMode
-              ? { type: 'json_schema', json_schema: { name: req.json.name, schema: req.json.schema, strict: true } }
-              : { type: 'json_object' };
-          }
+          // OpenAI counts a response format as part of the prefix. For other servers
+          // json_object is what keeps the reply parseable.
+          if (req.json && flavor.id !== 'openai') params.response_format = { type: 'json_object' };
 
           const stream = api.chat.completions.stream(params, { signal: req.signal });
           if (handlers.onText) stream.on('content', handlers.onText);

@@ -25,13 +25,14 @@ export async function addActionItem(item: Omit<ActionItem, 'id' | 'createdAt' | 
   const createdAt = item.createdAt ?? now();
   const updatedAt = item.updatedAt ?? createdAt;
   const res = await conn().execute(
-    `INSERT INTO action_items (folder_id, meeting_id, text, owner, status, first_seen_meeting, last_update_meeting,
+    `INSERT INTO action_items (folder_id, meeting_id, text, description, owner, status, first_seen_meeting, last_update_meeting,
        source_ms, parent_id, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [
       item.folderId,
       item.meetingId,
       item.text,
+      item.description ?? null,
       item.owner,
       item.status,
       item.firstSeenMeeting,
@@ -50,6 +51,7 @@ export async function addActionItem(item: Omit<ActionItem, 'id' | 'createdAt' | 
 
 const ACTION_ITEM_COLUMNS: Record<string, string> = {
   text: 'text',
+  description: 'description',
   owner: 'owner',
   status: 'status',
   firstSeenMeeting: 'first_seen_meeting',
@@ -61,7 +63,7 @@ const ACTION_ITEM_COLUMNS: Record<string, string> = {
 
 export async function updateActionItem(
   id: number,
-  patch: Partial<Pick<ActionItem, 'text' | 'owner' | 'status' | 'firstSeenMeeting' | 'lastUpdateMeeting' | 'sourceMs' | 'meetingId' | 'parentId'>>,
+  patch: Partial<Pick<ActionItem, 'text' | 'description' | 'owner' | 'status' | 'firstSeenMeeting' | 'lastUpdateMeeting' | 'sourceMs' | 'meetingId' | 'parentId'>>,
 ): Promise<void> {
   const sets: string[] = [];
   const params: unknown[] = [];

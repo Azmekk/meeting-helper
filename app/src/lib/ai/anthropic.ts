@@ -5,6 +5,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import {
   EMPTY_USAGE,
   addUsage,
+  jsonInstruction,
   missingRequired,
   parseJsonText,
   type AiAuth,
@@ -128,7 +129,7 @@ export const anthropic: AiProvider = {
       ...(i >= contextBlocks.length - contextMarks ? { cache_control: CACHE } : {}),
     }));
     if (req.contextTail) system.push({ type: 'text', text: req.contextTail });
-    system.push({ type: 'text', text: req.system });
+    system.push({ type: 'text', text: req.json ? `${req.system}\n\n${jsonInstruction(req.json.schema)}` : req.system });
 
     const tools: B.BetaTool[] | undefined = req.tools?.map((t) => ({
       name: t.name,
@@ -164,9 +165,6 @@ export const anthropic: AiProvider = {
         if (!legacy) {
           params.thinking = { type: 'adaptive' };
           params.output_config = { effort: EFFORT[req.effort ?? 'normal'] };
-        }
-        if (req.json) {
-          params.output_config = { ...params.output_config, format: { type: 'json_schema', schema: req.json.schema } };
         }
         if (tools?.length) params.tools = tools;
         if (fallbacks) {

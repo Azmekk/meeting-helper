@@ -1,5 +1,5 @@
 // Settings → Folders: the base folder, moving older meetings into it, rescan,
-// and whether folder AI updates run automatically.
+// and whether folder AI updates start switched on after a recording.
 import { open } from '@tauri-apps/plugin-dialog';
 import { mkdir } from '@tauri-apps/plugin-fs';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -13,7 +13,7 @@ import type { Meeting } from '../../lib/types';
 
 export function FoldersSection() {
   const baseFolder = useSettings((s) => s.settings.baseFolder);
-  const folderAiAuto = useSettings((s) => s.settings.folderAiAuto);
+  const folderAiPreselect = useSettings((s) => s.settings.folderAiPreselect);
   const [loose, setLoose] = useState<Meeting[] | null>(null);
   const [migrateOpen, setMigrateOpen] = useState(false);
   const [scanning, setScanning] = useState<string | null>(null);
@@ -131,10 +131,10 @@ export function FoldersSection() {
 
       <Card title="Folder AI">
         <SettingRow
-          title="Update folders automatically"
-          description="After a meeting in a folder gets its summary, update the folder summary, action items and extraction tables. Uses your AI key."
+          title="Preselect folder updates after a recording"
+          description="Start with the folder summary, action items and extraction tables switched on in the Recording saved dialog. They never run unless you press Start there or update them from the folder."
         >
-          <Switch checked={folderAiAuto} onChange={(v) => saveSettings({ folderAiAuto: v })} label="Update folders automatically" />
+          <Switch checked={folderAiPreselect} onChange={(v) => saveSettings({ folderAiPreselect: v })} label="Preselect folder updates after a recording" />
         </SettingRow>
       </Card>
 

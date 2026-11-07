@@ -1,13 +1,14 @@
 // Folder action items: tracked across meetings, updated by the reconcile step
-// after each meeting, editable by hand. Shown on the folder screen and, with
+// when the user asks, editable by hand. Shown on the folder screen and, with
 // `meetingId`, on the meeting screen, where it can follow just that meeting.
-// Completed items stay in the list until deleted by hand.
+// A task reads at a glance; clicking it opens its description. Completed items
+// stay in the list until deleted by hand.
 import { AiLanguageSelect } from '../ai/AiLanguageSelect';
 import { AiModelSelect, useAiModel } from '../ai/AiModelSelect';
 import { Check, ChevronDown, Circle, MessageSquare, Pencil, Plus, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Badge, Button, Callout, Card, Collapse, IconButton, Input, Segmented, Select, Spinner, clsx, errorMessage, toast } from '../ui';
+import { Badge, Button, Callout, Card, Collapse, IconButton, Input, Segmented, Select, Spinner, Textarea, clsx, errorMessage, toast } from '../ui';
 import { useAiKey } from '../meeting/AiPanels';
 import * as db from '../../lib/db';
 import { reconcileActionItems, runInFolderQueue, useFolderAi } from '../../lib/ai/folder';
@@ -57,6 +58,7 @@ export function ProgressPanel({
   const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [running, setRunning] = useState(false);
   const [showSuggested, setShowSuggested] = useState(false);
+  const [openIds, setOpenIds] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -110,7 +112,14 @@ export function ProgressPanel({
     }
   };
 
-  const save = async (item: ActionItem | null, patch: { text: string; owner: string | null; meetingId: number | null }) => {
+  const toggleOpen = (id: number) =>
+    setOpenIds((cur) => {
+      const next = new Set(cur);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+
+  const save = async (item: ActionItem | null, patch: ItemPatch) => {
     try {
       if (item) await db.updateActionItem(item.id, patch);
       else
@@ -118,6 +127,7 @@ export function ProgressPanel({
           folderId: folder.id,
           meetingId: patch.meetingId,
           text: patch.text,
+          description: patch.description,
           owner: patch.owner,
           status: 'open',
           firstSeenMeeting: null, // manual: not replaced when the AI re-runs a meeting
@@ -181,7 +191,7 @@ export function ProgressPanel({
     <Card
       title="Progress"
       description={
-        autoBusy ?? (compact ? undefined : 'Action items across the folder. Each new meeting marks items done or dropped and adds clear commitments; anything less certain waits under Suggested.')
+        autoBusy ?? (compact ? undefined : 'Action items across the folder. Updating from a meeting marks items done or dropped and adds clear commitments; anything less certain waits under Suggested.')
       }
       actions={
         <>
@@ -241,20 +251,7 @@ export function ProgressPanel({
               >
                 {item.status === 'dropped' ? <X size={12} className="text-faint" /> : <Check size={12} />}
               </button>
-              <div className="min-w-0 flex-1">
-                <div className={clsx('text-sm', item.status !== 'open' && 'text-muted line-through')}>
-                  {item.owner && <span className="mr-1.5 font-semibold text-text">{item.owner}:</span>}
-                  {item.text}
-                </div>
-                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-faint">
-                  <TaskId id={item.id} />
-                  {item.status !== 'open' && <Badge tone={item.status === 'done' ? 'ok' : 'neutral'}>{STATUS_LABEL[item.status]}</Badge>}
-                  <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" here={meetingId} onSeek={onSeek} />
-                  {item.lastUpdateMeeting != null && item.lastUpdateMeeting !== item.meetingId && (
-                    <MeetingLink meeting={byId.get(item.lastUpdateMeeting)} ms={null} prefix="Updated in" here={meetingId} onSeek={onSeek} />
-                  )}
-                </div>
-              </div>
+              <TaskBody item={item} open={openIds.has(item.id)} onToggle={() => toggleOpen(item.id)} onEdit={() => setEditing(item.id)} byId={byId} here={meetingId} onSeek={onSeek} />
               <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                 {onAsk && <IconButton size="sm" icon={MessageSquare} label="Ask about this" onClick={() => onAsk(item)} />}
                 {item.status === 'open' ? (
@@ -272,7 +269,7 @@ export function ProgressPanel({
       </ul>
       {!shown.length && editing !== 'new' && (
         <p className="px-5 py-6 text-center text-[13px] text-muted">
-          {related.length ? 'Nothing open. Nice.' : compact && scope === 'meeting' ? 'No tasks from this meeting yet.' : 'No action items yet. They appear after a meeting in this folder gets its summary, or add one by hand.'}
+          {related.length ? 'Nothing open. Nice.' : compact && scope === 'meeting' ? 'No tasks from this meeting yet.' : 'No action items yet. Update from a meeting, or add one by hand.'}
         </p>
       )}
       {suggested.length > 0 && (
@@ -289,24 +286,19 @@ export function ProgressPanel({
           </button>
           <Collapse open={showSuggested}>
             <ul className="divide-y divide-line border-t border-line">
-              {suggested.map((item) => (
-                <li key={item.id} className="flex items-start gap-3 px-5 py-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm">
-                      {item.owner && <span className="mr-1.5 font-semibold">{item.owner}:</span>}
-                      {item.text}
+              {suggested.map((item) =>
+                editing === item.id ? (
+                  <ItemEditor key={item.id} item={item} meetings={meetings} onSave={(p) => save(item, p)} onCancel={() => setEditing(null)} />
+                ) : (
+                  <li key={item.id} className="flex items-start gap-3 px-5 py-3">
+                    <TaskBody item={item} open={openIds.has(item.id)} onToggle={() => toggleOpen(item.id)} onEdit={() => setEditing(item.id)} byId={byId} here={meetingId} onSeek={onSeek} />
+                    <div className="flex shrink-0 items-center">
+                      <IconButton size="sm" icon={Check} label="Accept" onClick={() => accept(item)} className="hover:text-ok" />
+                      <IconButton size="sm" icon={X} label="Dismiss" onClick={() => remove(item)} />
                     </div>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-faint">
-                      <TaskId id={item.id} />
-                      <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" here={meetingId} onSeek={onSeek} />
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center">
-                    <IconButton size="sm" icon={Check} label="Accept" onClick={() => accept(item)} className="hover:text-ok" />
-                    <IconButton size="sm" icon={X} label="Dismiss" onClick={() => remove(item)} />
-                  </div>
-                </li>
-              ))}
+                  </li>
+                ),
+              )}
             </ul>
           </Collapse>
         </div>
@@ -317,6 +309,65 @@ export function ProgressPanel({
         </Button>
       </div>
     </Card>
+  );
+}
+
+// Owner and task on one line, the id and where it came from under it, and the
+// description when opened.
+function TaskBody({
+  item,
+  open,
+  onToggle,
+  onEdit,
+  byId,
+  here,
+  onSeek,
+}: {
+  item: ActionItem;
+  open: boolean;
+  onToggle: () => void;
+  onEdit: () => void;
+  byId: Map<number, Meeting>;
+  here?: number;
+  onSeek?: (ms: number) => void;
+}) {
+  const closed = item.status === 'done' || item.status === 'dropped';
+  const updatedIn = item.lastUpdateMeeting != null && item.lastUpdateMeeting !== item.meetingId ? byId.get(item.lastUpdateMeeting) : undefined;
+  return (
+    <div className="min-w-0 flex-1">
+      <button type="button" onClick={onToggle} aria-expanded={open} className={clsx('block w-full text-left text-sm transition-colors hover:text-accent-ink', closed && 'text-muted line-through')}>
+        {item.owner && <span className="mr-1.5 font-semibold">{item.owner}:</span>}
+        {item.text}
+      </button>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-faint">
+        <TaskId id={item.id} />
+        {closed && <Badge tone={item.status === 'done' ? 'ok' : 'neutral'}>{STATUS_LABEL[item.status]}</Badge>}
+        <MeetingLink meeting={item.meetingId != null ? byId.get(item.meetingId) : undefined} ms={item.sourceMs} prefix="From" here={here} onSeek={onSeek} />
+        <button type="button" onClick={onToggle} aria-expanded={open} className="inline-flex shrink-0 items-center gap-0.5 hover:text-accent-ink">
+          Description
+          <ChevronDown size={12} className={clsx('transition-transform', !open && '-rotate-90')} />
+        </button>
+      </div>
+      <Collapse open={open}>
+        <div className="mt-2 space-y-1.5 rounded-field bg-sunken/40 px-3 py-2 text-[13px]">
+          {item.description ? (
+            <p className="whitespace-pre-wrap text-text/80">{item.description}</p>
+          ) : (
+            <p className="text-muted">
+              No description yet.{' '}
+              <button type="button" onClick={onEdit} className="font-medium text-accent-ink hover:underline">
+                Add one
+              </button>
+            </p>
+          )}
+          {updatedIn && (
+            <div className="text-xs text-faint">
+              <MeetingLink meeting={updatedIn} ms={null} prefix="Updated in" here={here} onSeek={onSeek} />
+            </div>
+          )}
+        </div>
+      </Collapse>
+    </div>
   );
 }
 
@@ -358,6 +409,13 @@ function MeetingLink({
   );
 }
 
+interface ItemPatch {
+  text: string;
+  description: string | null;
+  owner: string | null;
+  meetingId: number | null;
+}
+
 function ItemEditor({
   item,
   meetings,
@@ -368,13 +426,14 @@ function ItemEditor({
   item: ActionItem | null;
   meetings: Meeting[];
   defaultMeeting?: number;
-  onSave: (p: { text: string; owner: string | null; meetingId: number | null }) => void;
+  onSave: (p: ItemPatch) => void;
   onCancel: () => void;
 }) {
   const [text, setText] = useState(item?.text ?? '');
+  const [description, setDescription] = useState(item?.description ?? '');
   const [owner, setOwner] = useState(item?.owner ?? '');
   const [meetingId, setMeetingId] = useState<number | null>(item ? item.meetingId : (defaultMeeting ?? null));
-  const submit = () => text.trim() && onSave({ text: text.trim(), owner: owner.trim() || null, meetingId });
+  const submit = () => text.trim() && onSave({ text: text.trim(), description: description.trim() || null, owner: owner.trim() || null, meetingId });
   return (
     <li className="flex flex-wrap items-center gap-2 bg-sunken/40 px-5 py-3">
       <Input
@@ -397,6 +456,16 @@ function ItemEditor({
           </option>
         ))}
       </Select>
+      <Textarea
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onCancel();
+        }}
+        rows={3}
+        placeholder="Description: what was said and the details around the task"
+        className="w-full resize-y text-[13px]"
+      />
       <Button size="sm" variant="primary" onClick={submit} disabled={!text.trim()}>
         Save
       </Button>

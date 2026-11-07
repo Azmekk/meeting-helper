@@ -3,9 +3,19 @@
 import * as db from './db';
 import type { Meeting } from './types';
 
-const ITEMS: { text: string; owner: string | null; status: 'open' | 'done' | 'dropped' }[] = [
-  { text: 'Send Q3 bank statements to Иван', owner: 'Martin Yordanov', status: 'open' },
-  { text: 'File the Q3 VAT return', owner: 'Иван Петров', status: 'open' },
+const ITEMS: { text: string; description?: string; owner: string | null; status: 'open' | 'done' | 'dropped' }[] = [
+  {
+    text: 'Send Q3 bank statements to Иван',
+    description: 'Иван can’t finish the VAT return without the August and September statements. Martin said the bank portal only exports PDFs, so he will send those and Иван will re-key the totals. It needs to happen before the 10th to leave time for the return.',
+    owner: 'Martin Yordanov',
+    status: 'open',
+  },
+  {
+    text: 'File the Q3 VAT return',
+    description: 'Due on 14 November. Иван confirmed the invoice numbering gap from August doesn’t block filing, but wants it explained in a note to the auditor.',
+    owner: 'Иван Петров',
+    status: 'open',
+  },
   { text: 'Book onboarding calls with both new clients', owner: 'Martin Yordanov', status: 'done' },
   { text: 'Share the onboarding checklist template', owner: 'Мария Георгиева', status: 'done' },
   { text: 'Decide whether to switch payroll provider', owner: null, status: 'open' },
@@ -38,6 +48,7 @@ export async function fillSampleFolderData(folderId: number, meetings: Meeting[]
       folderId,
       meetingId: first,
       text: item.text,
+      description: item.description ?? null,
       owner: item.owner,
       status: item.status,
       firstSeenMeeting: first,

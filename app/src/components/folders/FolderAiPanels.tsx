@@ -115,7 +115,7 @@ export function FolderSummaryPanel({ folder }: { folder: Folder }) {
             ? autoBusy
             : doc
               ? `${doc.model ?? 'Unknown model'} · ${formatUsd(doc.costUsd)} · ${formatDate(doc.createdAt)}`
-              : 'Where things stand across all meetings. Updated after each meeting gets its summary.'
+              : 'Where things stand across all meetings. Updates when you choose.'
       }
       actions={
         busy ? (
